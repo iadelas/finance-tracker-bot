@@ -130,7 +130,7 @@ class VisionProcessor:
         return receipt_data
     
     def _extract_receipt_date(self, text, fallback_date):
-        """Extract date from receipt text"""
+        """Extract date from receipt text with timezone handling"""
         date_patterns = [
             r'(\d{1,2}[/-]\d{1,2}[/-]\d{2,4})',  # DD/MM/YYYY or MM/DD/YYYY
             r'(\d{2,4}[/-]\d{1,2}[/-]\d{1,2})',  # YYYY/MM/DD
@@ -145,14 +145,20 @@ class VisionProcessor:
                 for fmt in ['%d/%m/%Y', '%m/%d/%Y', '%Y/%m/%d', '%d-%m-%Y', '%Y-%m-%d']:
                     try:
                         parsed_date = datetime.strptime(date_str, fmt)
+                        
+                        # CRITICAL FIX: Handle timezone comparison
+                        # Convert both dates to naive for comparison
+                        fallback_naive = fallback_date.replace(tzinfo=None) if fallback_date.tzinfo else fallback_date
+                        
                         # Validate date is reasonable (not future, not too old)
-                        if (fallback_date - timedelta(days=30)) <= parsed_date <= fallback_date:
+                        if (fallback_naive - timedelta(days=30)) <= parsed_date <= fallback_naive:
                             return parsed_date.strftime('%Y-%m-%d')
                     except ValueError:
                         continue
         
-        # Return fallback date if no valid date found
-        return fallback_date.strftime('%Y-%m-%d')
+        # Return fallback date (handle timezone)
+        fallback_naive = fallback_date.replace(tzinfo=None) if fallback_date.tzinfo else fallback_date
+        return fallback_naive.strftime('%Y-%m-%d')
     
     def _categorize_receipt(self, location, full_text):
         """Auto-categorize based on merchant and content"""
@@ -192,27 +198,3 @@ class VisionProcessor:
             return 'Utilities'
         
         return 'Other'
-    
-    def test_vision_permissions(self):
-        """Test Vision API permissions"""
-        if not self.client:
-            print("❌ Vision API client not initialized")
-            return False
-        
-        try:
-            # Create a simple test image (minimal valid image data)
-            import base64
-            # 1x1 pixel white PNG
-            test_image = base64.b64decode(
-                'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChAGA'
-            )
-            
-            image = vision.Image(content=test_image)
-            response = self.client.text_detection(image=image)
-            
-            print("✅ Vision API permissions test successful")
-            return True
-            
-        except Exception as e:
-            print(f"❌ Vision API test failed: {e}")
-            return False

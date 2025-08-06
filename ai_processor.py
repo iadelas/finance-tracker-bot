@@ -95,10 +95,13 @@ class AIProcessor:
             return ai_extracted_date
         
         # 2. Enhanced relative date parsing for Indonesian
-        text_lower = text.lower().strip()
-        
-        if not message_date:
+        if message_date and message_date.tzinfo:
+            message_date = message_date.replace(tzinfo=None)
+        elif not message_date:
             message_date = datetime.now()
+        
+        # 3. Enhanced relative date parsing for Indonesian
+        text_lower = text.lower().strip()
         
         # Indonesian relative date patterns
         date_patterns = {
@@ -131,7 +134,7 @@ class AIProcessor:
         }
         
         # Check for explicit relative dates
-        if any(word in text_lower for word in date_patterns['yesterday']):
+        if any(word in text_lower for word in date_patterns['kemarin','kmrn','yesterday']):
             return (message_date - timedelta(days=1)).strftime('%Y-%m-%d')
         
         if any(word in text_lower for word in date_patterns['day_before_yesterday']):

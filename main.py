@@ -1,14 +1,28 @@
 import logging
 import os
-import signal
-import sys
+from threading import Thread
+from http.server import HTTPServer, BaseHTTPRequestHandler
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, CallbackContext
-from telegram.error import Conflict, NetworkError
 from ai_processor import AIProcessor
 from ocr_processor import OCRProcessor
 from sheets_manager import SheetsManager
 from config import TELEGRAM_BOT_TOKEN
+
+# Simple health check handler
+class HealthHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        if self.path == '/health':
+            self.send_response(200)
+            self.send_header('Content-type', 'text/plain')
+            self.end_headers()
+            self.wfile.write(b'Bot is running')
+        else:
+            self.send_response(404)
+            self.end_headers()
+    
+    def log_message(self, format, *args):
+        pass  # Suppress HTTP server logs
 
 # Enable logging
 logging.basicConfig(
@@ -22,6 +36,7 @@ ai_processor = AIProcessor()
 ocr_processor = OCRProcessor()
 sheets_manager = SheetsManager()
 
+# Your existing handler functions (start, help_command, etc.)
 async def start(update: Update, context: CallbackContext):
     """Start command handler"""
     welcome_message = """
@@ -43,7 +58,6 @@ Mulai catat pengeluaran Anda! 💰
     await update.message.reply_text(welcome_message, parse_mode='Markdown')
 
 async def help_command(update: Update, context: CallbackContext):
-    """Help command handler"""
     help_text = """
 🔧 **Bantuan Finance Tracker Bot**
 
@@ -67,26 +81,20 @@ async def help_command(update: Update, context: CallbackContext):
     await update.message.reply_text(help_text, parse_mode='Markdown')
 
 async def summary_command(update: Update, context: CallbackContext):
-    """Summary command handler"""
     summary = sheets_manager.get_monthly_summary()
     await update.message.reply_text(summary, parse_mode='Markdown')
 
 async def handle_text(update: Update, context: CallbackContext):
-    """Handle text expense input"""
     user_text = update.message.text
-    
-    # Show processing message
     processing_msg = await update.message.reply_text("🔄 Memproses pengeluaran...")
     
     try:
-        # Process with AI
         expense_data = ai_processor.parse_expense_text(user_text)
         
         if expense_data.get('error'):
             await processing_msg.edit_text(f"❌ Error: {expense_data['error']}")
             return
         
-        # Add to Google Sheets
         success = sheets_manager.add_expense(expense_data)
         
         if success:
@@ -111,23 +119,17 @@ async def handle_text(update: Update, context: CallbackContext):
         await processing_msg.edit_text("❌ Terjadi kesalahan saat memproses")
 
 async def handle_photo(update: Update, context: CallbackContext):
-    """Handle photo/receipt input"""
     processing_msg = await update.message.reply_text("📷 Memproses foto struk...")
     
     try:
-        # Download photo
         photo_file = await update.message.photo[-1].get_file()
         photo_path = "temp_receipt.jpg"
         await photo_file.download_to_drive(photo_path)
         
-        # Extract text with OCR
         ocr_text = ocr_processor.extract_text_from_image(photo_path)
-        
-        # Process with AI
         expense_data = ai_processor.parse_expense_text(ocr_text)
         expense_data['source'] = 'Photo Receipt'
         
-        # Clean up temp file
         if os.path.exists(photo_path):
             os.remove(photo_path)
         
@@ -135,7 +137,6 @@ async def handle_photo(update: Update, context: CallbackContext):
             await processing_msg.edit_text(f"❌ Tidak dapat membaca struk: {expense_data['error']}")
             return
         
-        # Add to Google Sheets
         success = sheets_manager.add_expense(expense_data)
         
         if success:
@@ -160,49 +161,41 @@ async def handle_photo(update: Update, context: CallbackContext):
         logger.error(f"Error processing photo: {e}")
         await processing_msg.edit_text("❌ Gagal memproses foto struk")
 
-def signal_handler(sig, frame):
-    print('🛑 Bot shutting down gracefully...')
-    sys.exit(0)
+def start_health_server():
+    """Start HTTP server for Render health checks"""
+    port = int(os.environ.get('PORT', 10000))
+    server = HTTPServer(('0.0.0.0', port), HealthHandler)
+    logger.info(f"🌐 Health check server starting on port {port}")
+    server.serve_forever()
 
 def main():
+    """Main function with health check server"""
     if not TELEGRAM_BOT_TOKEN:
         logger.error("TELEGRAM_BOT_TOKEN not found!")
         return
     
-    # Handle shutdown signals
-    signal.signal(signal.SIGINT, signal_handler)
-    signal.signal(signal.SIGTERM, signal_handler)
+    # Start health check server in background thread
+    health_thread = Thread(target=start_health_server, daemon=True)
+    health_thread.start()
     
-    try:
-        application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
-        
-        # Add all your handlers here...
-        application.add_handler(CommandHandler("start", start))
-        application.add_handler(CommandHandler("help", help_command))
-        application.add_handler(CommandHandler("summary", summary_command))
-        application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
-        application.add_handler(MessageHandler(filters.PHOTO, handle_photo))
-        
-        logger.info("🚀 Starting Finance Tracker Bot...")
-        print("🤖 Bot starting on port 10000 - single instance mode")
-        
-        # Run with conflict handling
-        application.run_polling(
-            allowed_updates=Update.ALL_TYPES,
-            drop_pending_updates=True,  # Clear any pending updates
-            close_loop=False
-        )
-        
-    except Conflict as e:
-        logger.error(f"❌ Telegram conflict error: {e}")
-        print("❌ Another bot instance is running. Terminating...")
-        sys.exit(1)
-    except NetworkError as e:
-        logger.error(f"❌ Network error: {e}")
-        sys.exit(1)
-    except Exception as e:
-        logger.error(f"❌ Unexpected error: {e}")
-        sys.exit(1)
+    # Create Telegram application
+    application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
+    
+    # Add handlers
+    application.add_handler(CommandHandler("start", start))
+    application.add_handler(CommandHandler("help", help_command))
+    application.add_handler(CommandHandler("summary", summary_command))
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
+    application.add_handler(MessageHandler(filters.PHOTO, handle_photo))
+    
+    logger.info("🚀 Starting Finance Tracker Bot...")
+    print("🤖 Bot starting - with health check endpoint")
+    
+    # Run bot polling
+    application.run_polling(
+        allowed_updates=Update.ALL_TYPES,
+        drop_pending_updates=True
+    )
 
 if __name__ == '__main__':
     main()

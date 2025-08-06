@@ -5,13 +5,14 @@ from datetime import datetime, timedelta
 from config import GEMINI_API_KEY
 
 class AIProcessor:
-    def __init__(self):
+    def __init__(self, sheets_manager=None):
         if not GEMINI_API_KEY:
             print("❌ GEMINI_API_KEY not found!")
             return
         
         genai.configure(api_key=GEMINI_API_KEY)
         self.model = genai.GenerativeModel('gemini-1.5-flash')
+        self.sheets_manager = sheets_manager
         print("✅ Gemini AI initialized with gemini-1.5-flash")
     
     def _get_available_categories(self):

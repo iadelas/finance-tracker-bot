@@ -1,26 +1,47 @@
 import logging
 import os
+import sys
+import traceback
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, CallbackContext
-from telegram.request import HTTPXRequest
 from ai_processor import AIProcessor
 from ocr_processor import OCRProcessor
 from sheets_manager import SheetsManager
 from config import TELEGRAM_BOT_TOKEN
 
-# Enable logging
+# Enable detailed logging
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    level=logging.INFO
+    level=logging.DEBUG
 )
 logger = logging.getLogger(__name__)
 
-# Initialize processors
-ai_processor = AIProcessor()
-ocr_processor = OCRProcessor()
-sheets_manager = SheetsManager()
+# Initialize processors with error handling
+try:
+    logger.info("🔧 Initializing AI processor...")
+    ai_processor = AIProcessor()
+    logger.info("✅ AI processor initialized")
+except Exception as e:
+    logger.error(f"❌ AI processor failed: {e}")
+    ai_processor = None
 
-# Your existing handlers remain the same
+try:
+    logger.info("🔧 Initializing OCR processor...")
+    ocr_processor = OCRProcessor()
+    logger.info("✅ OCR processor initialized")
+except Exception as e:
+    logger.error(f"❌ OCR processor failed: {e}")
+    ocr_processor = None
+
+try:
+    logger.info("🔧 Initializing Sheets manager...")
+    sheets_manager = SheetsManager()
+    logger.info("✅ Sheets manager initialized")
+except Exception as e:
+    logger.error(f"❌ Sheets manager failed: {e}")
+    sheets_manager = None
+
+# Your existing handler functions
 async def start(update: Update, context: CallbackContext):
     welcome_message = """
 🤖 **Selamat datang di Finance Tracker Bot!**
@@ -49,48 +70,37 @@ async def help_command(update: Update, context: CallbackContext):
 • "bayar [deskripsi] [jumlah]"
 • "[aktivitas] [jumlah] [tempat]"
 
-**Contoh valid:**
-• ✅ "beli sayur 15ribu di pasar"
-• ✅ "bensin 20k shell"
-• ✅ "lunch 35000 mall"
-
 **Commands:**
 • /start - Mulai bot
 • /summary - Ringkasan bulanan
 • /help - Bantuan ini
-
-**Foto struk:** Kirim foto receipt/struk untuk parsing otomatis
     """
     await update.message.reply_text(help_text, parse_mode='Markdown')
 
 async def summary_command(update: Update, context: CallbackContext):
-    summary = sheets_manager.get_monthly_summary()
-    await update.message.reply_text(summary, parse_mode='Markdown')
+    if sheets_manager:
+        summary = sheets_manager.get_monthly_summary()
+        await update.message.reply_text(summary, parse_mode='Markdown')
+    else:
+        await update.message.reply_text("❌ Sheets manager not available")
 
 async def handle_text(update: Update, context: CallbackContext):
+    if not ai_processor or not sheets_manager:
+        await update.message.reply_text("❌ Services not available")
+        return
+    
     user_text = update.message.text
     processing_msg = await update.message.reply_text("🔄 Memproses pengeluaran...")
     
     try:
         expense_data = ai_processor.parse_expense_text(user_text)
-        
-        if expense_data.get('error'):
-            await processing_msg.edit_text(f"❌ Error: {expense_data['error']}")
-            return
-        
         success = sheets_manager.add_expense(expense_data)
         
         if success:
             response = f"""
 ✅ **Pengeluaran berhasil dicatat!**
-
-📝 **Detail:**
 • **Deskripsi:** {expense_data.get('description', 'N/A')}
 • **Jumlah:** Rp {expense_data.get('amount', 0):,.0f}
-• **Lokasi:** {expense_data.get('location', 'N/A')}
-• **Kategori:** {expense_data.get('category', 'N/A')}
-
-💾 Data tersimpan di Google Sheets
             """
         else:
             response = "❌ Gagal menyimpan ke Google Sheets"
@@ -102,83 +112,76 @@ async def handle_text(update: Update, context: CallbackContext):
         await processing_msg.edit_text("❌ Terjadi kesalahan saat memproses")
 
 async def handle_photo(update: Update, context: CallbackContext):
-    processing_msg = await update.message.reply_text("📷 Memproses foto struk...")
-    
-    try:
-        photo_file = await update.message.photo[-1].get_file()
-        photo_path = "temp_receipt.jpg"
-        await photo_file.download_to_drive(photo_path)
-        
-        ocr_text = ocr_processor.extract_text_from_image(photo_path)
-        expense_data = ai_processor.parse_expense_text(ocr_text)
-        expense_data['source'] = 'Photo Receipt'
-        
-        if os.path.exists(photo_path):
-            os.remove(photo_path)
-        
-        if expense_data.get('error'):
-            await processing_msg.edit_text(f"❌ Tidak dapat membaca struk: {expense_data['error']}")
-            return
-        
-        success = sheets_manager.add_expense(expense_data)
-        
-        if success:
-            response = f"""
-✅ **Struk berhasil diproses!**
-
-📝 **Detail dari foto:**
-• **Deskripsi:** {expense_data.get('description', 'N/A')}
-• **Jumlah:** Rp {expense_data.get('amount', 0):,.0f}
-• **Lokasi:** {expense_data.get('location', 'N/A')}
-• **Kategori:** {expense_data.get('category', 'N/A')}
-
-📸 Sumber: Foto struk
-💾 Data tersimpan di Google Sheets
-            """
-        else:
-            response = "❌ Gagal menyimpan ke Google Sheets"
-        
-        await processing_msg.edit_text(response, parse_mode='Markdown')
-        
-    except Exception as e:
-        logger.error(f"Error processing photo: {e}")
-        await processing_msg.edit_text("❌ Gagal memproses foto struk")
+    await update.message.reply_text("📷 Photo processing temporarily disabled")
 
 def main():
-    """Main function with forced webhook mode for Render"""
-    if not TELEGRAM_BOT_TOKEN:
-        logger.error("❌ TELEGRAM_BOT_TOKEN not found!")
-        return
+    """Main function with comprehensive error handling"""
+    logger.info("🚀 Starting Finance Tracker Bot main function...")
     
-    port = int(os.environ.get('PORT', 8000))
-    
-    # Force webhook mode on Render
-    is_render = os.environ.get('RENDER') or os.environ.get('RENDER_EXTERNAL_URL')
-    
-    application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
-    
-    # Add handlers
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(CommandHandler("help", help_command))
-    application.add_handler(CommandHandler("summary", summary_command))
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
-    application.add_handler(MessageHandler(filters.PHOTO, handle_photo))
-    
-    if is_render:
-        # Production/Render mode - ALWAYS use webhooks
-        webhook_url = os.environ.get('RENDER_EXTERNAL_URL', f'https://your-app-name.onrender.com')
-        logger.info("🌐 Render detected - Running with webhooks")
-        logger.info(f"🔗 Webhook URL: {webhook_url}/webhook")
+    try:
+        # Check critical environment variables
+        if not TELEGRAM_BOT_TOKEN:
+            logger.error("❌ TELEGRAM_BOT_TOKEN not found!")
+            sys.exit(1)
+        logger.info("✅ Telegram bot token found")
         
-        application.run_webhook(
-            listen="0.0.0.0",
-            port=port,
-            webhook_url=f"{webhook_url}/webhook",
-            url_path="/webhook",
-            drop_pending_updates=True
-        )
-    else:
-        # Local development - use polling
-        logger.info("💻 Local mode - Running with polling")
-        application.run_polling(allowed_updates=Update.ALL_TYPES)
+        # Get port and webhook info
+        port = int(os.environ.get('PORT', 8000))
+        render_url = os.environ.get('RENDER_EXTERNAL_URL')
+        
+        logger.info(f"📍 Port: {port}")
+        logger.info(f"📍 Render URL: {render_url}")
+        
+        # Create Telegram application
+        logger.info("🔧 Creating Telegram application...")
+        application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
+        logger.info("✅ Telegram application created")
+        
+        # Add handlers
+        logger.info("🔧 Adding handlers...")
+        application.add_handler(CommandHandler("start", start))
+        application.add_handler(CommandHandler("help", help_command))
+        application.add_handler(CommandHandler("summary", summary_command))
+        application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
+        application.add_handler(MessageHandler(filters.PHOTO, handle_photo))
+        logger.info("✅ Handlers added")
+        
+        # Determine run mode
+        if render_url:
+            # Webhook mode for production
+            webhook_full_url = f"{render_url}/webhook"
+            logger.info(f"🌐 Webhook mode - URL: {webhook_full_url}")
+            
+            logger.info("🔧 Starting webhook server...")
+            application.run_webhook(
+                listen="0.0.0.0",
+                port=port,
+                webhook_url=webhook_full_url,
+                url_path="/webhook",
+                drop_pending_updates=True
+            )
+        else:
+            # Polling mode for development
+            logger.info("💻 Polling mode")
+            application.run_polling(allowed_updates=Update.ALL_TYPES)
+            
+    except ImportError as e:
+        logger.error(f"❌ Import error: {e}")
+        logger.error("Full traceback:")
+        traceback.print_exc()
+        sys.exit(1)
+    except Exception as e:
+        logger.error(f"❌ Unexpected error in main(): {e}")
+        logger.error("Full traceback:")
+        traceback.print_exc()
+        sys.exit(1)
 
+if __name__ == '__main__':
+    try:
+        main()
+    except KeyboardInterrupt:
+        logger.info("🛑 Bot stopped by user")
+    except Exception as e:
+        logger.error(f"❌ Critical error: {e}")
+        traceback.print_exc()
+        sys.exit(1)

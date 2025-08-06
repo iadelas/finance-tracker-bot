@@ -5,18 +5,18 @@ import traceback
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, CallbackContext
 from ai_processor import AIProcessor
-from ocr_processor import OCRProcessor
+from vision_processor import VisionProcessor
 from sheets_manager import SheetsManager
 from config import TELEGRAM_BOT_TOKEN
 
-# Enable detailed logging
+# Configure logging
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    level=logging.DEBUG
+    level=logging.INFO
 )
 logger = logging.getLogger(__name__)
 
-# Initialize processors with error handling
+# Initialize processors
 try:
     logger.info("🔧 Initializing AI processor...")
     ai_processor = AIProcessor()
@@ -26,12 +26,18 @@ except Exception as e:
     ai_processor = None
 
 try:
-    logger.info("🔧 Initializing OCR processor...")
-    ocr_processor = OCRProcessor()
-    logger.info("✅ OCR processor initialized")
+    logger.info("🔧 Initializing Vision processor...")
+    vision_processor = VisionProcessor()
+    
+    # Test Vision API permissions on startup
+    if vision_processor.test_vision_permissions():
+        logger.info("✅ Vision processor initialized and tested")
+    else:
+        logger.warning("⚠️ Vision processor initialized but permissions test failed")
+        
 except Exception as e:
-    logger.error(f"❌ OCR processor failed: {e}")
-    ocr_processor = None
+    logger.error(f"❌ Vision processor failed: {e}")
+    vision_processor = None
 
 try:
     logger.info("🔧 Initializing Sheets manager...")
@@ -41,7 +47,7 @@ except Exception as e:
     logger.error(f"❌ Sheets manager failed: {e}")
     sheets_manager = None
 
-# Your existing handler functions
+# Command handlers
 async def start(update: Update, context: CallbackContext):
     welcome_message = """
 🤖 **Selamat datang di Finance Tracker Bot!**
@@ -74,6 +80,8 @@ async def help_command(update: Update, context: CallbackContext):
 • /start - Mulai bot
 • /summary - Ringkasan bulanan
 • /help - Bantuan ini
+
+**Foto struk:** Kirim foto receipt untuk parsing otomatis dengan AI
     """
     await update.message.reply_text(help_text, parse_mode='Markdown')
 
@@ -84,108 +92,30 @@ async def summary_command(update: Update, context: CallbackContext):
     else:
         await update.message.reply_text("❌ Sheets manager not available")
 
-async def handle_photo(update: Update, context: CallbackContext):
-    """Handle photo/receipt processing with OCR"""
-    processing_msg = await update.message.reply_text("📷 Memproses foto struk...")
-    
-    try:
-        # Get the largest photo size
-        photo_file = await update.message.photo[-1].get_file()
-        photo_path = "temp_receipt.jpg"
-        
-        # Download photo locally
-        await photo_file.download_to_drive(photo_path)
-        logger.info(f"📸 Photo downloaded: {photo_path}")
-        
-        # Extract text using OCR
-        if ocr_processor:
-            ocr_text = ocr_processor.extract_text_from_image(photo_path)
-            logger.info(f"🔍 OCR extracted text: {ocr_text[:100]}...")
-        else:
-            await processing_msg.edit_text("❌ OCR processor not available")
-            return
-        
-        # Parse expense data using AI
-        if ai_processor:
-            expense_data = ai_processor.parse_expense_text(ocr_text)
-            expense_data['source'] = 'Photo Receipt'
-        else:
-            # Fallback parsing without AI
-            expense_data = parse_expense_fallback(ocr_text)
-            expense_data['source'] = 'Photo Receipt (Fallback)'
-        
-        # Clean up temp file
-        if os.path.exists(photo_path):
-            os.remove(photo_path)
-            logger.info("🧹 Temp photo file cleaned up")
-        
-        # Handle parsing errors
-        if expense_data.get('error'):
-            await processing_msg.edit_text(f"❌ Tidak dapat membaca struk: {expense_data['error']}")
-            return
-        
-        # Save to Google Sheets
-        if sheets_manager:
-            success = sheets_manager.add_expense(expense_data)
-        else:
-            success = False
-        
-        # Send response
-        if success:
-            response = f"""
-✅ **Struk berhasil diproses!**
-
-📝 **Detail dari foto:**
-• **Deskripsi:** {expense_data.get('description', 'N/A')}
-• **Jumlah:** Rp {expense_data.get('amount', 0):,.0f}
-• **Lokasi:** {expense_data.get('location', 'N/A')}
-• **Kategori:** {expense_data.get('category', 'N/A')}
-
-📸 Sumber: {expense_data.get('source', 'Photo')}
-💾 Data tersimpan di Google Sheets
-            """
-        else:
-            response = f"""
-⚠️ **Foto diproses tapi gagal menyimpan**
-
-📝 **Detail yang diparsing:**
-• **Deskripsi:** {expense_data.get('description', 'N/A')}
-• **Jumlah:** Rp {expense_data.get('amount', 0):,.0f}
-
-❌ Masalah koneksi Google Sheets
-            """
-        
-        await processing_msg.edit_text(response, parse_mode='Markdown')
-        
-    except Exception as e:
-        logger.error(f"❌ Error processing photo: {e}")
-        
-        # Clean up temp file if it exists
-        if os.path.exists("temp_receipt.jpg"):
-            os.remove("temp_receipt.jpg")
-        
-        await processing_msg.edit_text("❌ Gagal memproses foto struk")
-
+# Message handlers
 async def handle_text(update: Update, context: CallbackContext):
+    """Handle text expense input"""
     user_text = update.message.text
-    message_date = update.message.date  # Get message timestamp
+    message_date = update.message.date
     user_name = update.message.from_user.username or update.message.from_user.first_name
     
     processing_msg = await update.message.reply_text("🔄 Memproses pengeluaran...")
     
     try:
-        # Pass message date and username to AI processor
+        # Parse with AI processor
         if ai_processor:
             expense_data = ai_processor.parse_expense_text(user_text, message_date, user_name)
         else:
             expense_data = {'error': 'AI processor not available'}
         
+        # Use fallback if AI fails
         if expense_data.get('error'):
-            expense_data = parse_expense_fallback(user_text, message_date, user_name)
+            expense_data = _fallback_parse(user_text, message_date, user_name)
             expense_data['source'] = 'Fallback Parser'
         else:
             expense_data['source'] = 'Gemini AI'
         
+        # Save to Google Sheets
         success = sheets_manager.add_expense(expense_data) if sheets_manager else False
         
         if success:
@@ -203,7 +133,7 @@ async def handle_text(update: Update, context: CallbackContext):
 💾 Data tersimpan di Google Sheets
             """
         else:
-            response = f"❌ Gagal menyimpan ke Google Sheets"
+            response = "❌ Gagal menyimpan ke Google Sheets"
         
         await processing_msg.edit_text(response, parse_mode='Markdown')
         
@@ -212,64 +142,88 @@ async def handle_text(update: Update, context: CallbackContext):
         await processing_msg.edit_text("❌ Terjadi kesalahan saat memproses")
 
 async def handle_photo(update: Update, context: CallbackContext):
-    """Handle photo with receipt date priority"""
+    """Handle receipt photo processing with Google Vision API"""
     user_name = update.message.from_user.username or update.message.from_user.first_name
-    processing_msg = await update.message.reply_text("📷 Memproses foto struk...")
+    message_date = update.message.date
+    processing_msg = await update.message.reply_text("📷 Analyzing receipt with Google Vision AI...")
     
     try:
+        # Download photo
         photo_file = await update.message.photo[-1].get_file()
         photo_path = "temp_receipt.jpg"
         await photo_file.download_to_drive(photo_path)
         
-        if ocr_processor:
-            ocr_text = ocr_processor.extract_text_from_image(photo_path)
-            # TODO: Extract receipt date from OCR text if possible
-            receipt_date = update.message.date  # For now, use message date
-            
-            expense_data = ai_processor.parse_receipt_data(ocr_text, receipt_date, user_name)
+        logger.info(f"📸 Photo downloaded: {photo_path}")
+        
+        # Process with Vision API
+        if vision_processor:
+            receipt_data = vision_processor.extract_receipt_data(photo_path, message_date, user_name)
         else:
-            await processing_msg.edit_text("❌ OCR processor not available")
+            await processing_msg.edit_text("❌ Vision processor not available")
             return
         
+        # Clean up temp file
         if os.path.exists(photo_path):
             os.remove(photo_path)
+            logger.info("🧹 Temp photo file cleaned up")
         
-        success = sheets_manager.add_expense(expense_data) if sheets_manager else False
+        # Handle errors
+        if receipt_data.get('error'):
+            await processing_msg.edit_text(f"❌ Receipt analysis failed: {receipt_data['error']}")
+            return
+        
+        # Save to Google Sheets
+        success = sheets_manager.add_expense(receipt_data) if sheets_manager else False
         
         if success:
             response = f"""
-✅ **Struk berhasil diproses!**
+✅ **Receipt successfully processed!**
 
-📝 **Detail dari foto:**
-• **Tanggal:** {expense_data.get('transaction_date')}
-• **Deskripsi:** {expense_data.get('description', 'N/A')}
-• **Jumlah:** Rp {expense_data.get('amount', 0):,.0f}
-• **Lokasi:** {expense_data.get('location', 'N/A')}
-• **Input oleh:** {expense_data.get('input_by', 'N/A')}
+📝 **Extracted details:**
+• **Date:** {receipt_data.get('transaction_date')}
+• **Description:** {receipt_data.get('description', 'N/A')}
+• **Amount:** Rp {receipt_data.get('amount', 0):,.0f}
+• **Merchant:** {receipt_data.get('location', 'N/A')}
+• **Category:** {receipt_data.get('category', 'N/A')}
+• **Processed by:** {user_name}
 
-📸 Sumber: Receipt OCR
+📸 **Source:** Google Vision API
+💾 **Status:** Saved to Google Sheets
             """
         else:
-            response = "❌ Gagal menyimpan data struk"
+            response = f"""
+⚠️ **Receipt processed but failed to save**
+
+📝 **Extracted details:**
+• **Amount:** Rp {receipt_data.get('amount', 0):,.0f}
+• **Merchant:** {receipt_data.get('location', 'N/A')}
+
+❌ Google Sheets connection issue
+            """
         
         await processing_msg.edit_text(response, parse_mode='Markdown')
         
     except Exception as e:
-        logger.error(f"Error processing photo: {e}")
-        await processing_msg.edit_text("❌ Gagal memproses foto struk")
+        logger.error(f"❌ Error processing receipt: {e}")
+        
+        # Cleanup
+        if os.path.exists("temp_receipt.jpg"):
+            os.remove("temp_receipt.jpg")
+        
+        await processing_msg.edit_text("❌ Failed to process receipt image")
 
-
-def parse_expense_fallback(text):
+def _fallback_parse(text, message_date, user_name):
     """Simple regex-based expense parser as fallback"""
     import re
+    from datetime import datetime
     
     # Extract amount
     amount = 0
     amount_patterns = [
-        r'(\d+)(?:ribu|rb)',
-        r'(\d+)k', 
-        r'(\d+)(?:000)',
-        r'(\d+)'
+        r'(\d+)(?:ribu|rb)',  # "4ribu" → 4000
+        r'(\d+)k',            # "20k" → 20000  
+        r'(\d+)(?:000)',      # "25000" → 25000
+        r'(\d+)'              # fallback to any number
     ]
     
     for pattern in amount_patterns:
@@ -285,32 +239,32 @@ def parse_expense_fallback(text):
             break
     
     # Simple category detection
-    category = 'other'
+    category = 'Other'
     if any(word in text.lower() for word in ['makan', 'beli', 'food', 'goreng']):
-        category = 'food'
+        category = 'Food'
     elif any(word in text.lower() for word in ['bensin', 'grab', 'gojek']):
-        category = 'transport'
+        category = 'Transport'
     
     return {
-        'description': text[:50],
+        'description': text[:50].capitalize(),
         'amount': amount,
         'location': 'Unknown',
-        'category': category
+        'category': category,
+        'transaction_date': message_date.strftime('%Y-%m-%d') if message_date else datetime.now().strftime('%Y-%m-%d'),
+        'input_by': user_name or 'Unknown'
     }
-
 
 def main():
     """Main function with comprehensive error handling"""
-    logger.info("🚀 Starting Finance Tracker Bot main function...")
+    logger.info("🚀 Starting Finance Tracker Bot...")
     
     try:
-        # Check critical environment variables
+        # Validate environment
         if not TELEGRAM_BOT_TOKEN:
             logger.error("❌ TELEGRAM_BOT_TOKEN not found!")
             sys.exit(1)
-        logger.info("✅ Telegram bot token found")
         
-        # Get port and webhook info
+        # Get deployment configuration
         port = int(os.environ.get('PORT', 8000))
         render_url = os.environ.get('RENDER_EXTERNAL_URL')
         
@@ -318,55 +272,39 @@ def main():
         logger.info(f"📍 Render URL: {render_url}")
         
         # Create Telegram application
-        logger.info("🔧 Creating Telegram application...")
         application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
-        logger.info("✅ Telegram application created")
         
         # Add handlers
-        logger.info("🔧 Adding handlers...")
         application.add_handler(CommandHandler("start", start))
         application.add_handler(CommandHandler("help", help_command))
         application.add_handler(CommandHandler("summary", summary_command))
         application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
         application.add_handler(MessageHandler(filters.PHOTO, handle_photo))
-        logger.info("✅ Handlers added")
         
-        # Determine run mode
+        logger.info("✅ Handlers registered")
+        
+        # Start bot
         if render_url:
-            # Webhook mode for production
-            webhook_full_url = f"{render_url}/webhook"
-            logger.info(f"🌐 Webhook mode - URL: {webhook_full_url}")
+            # Production webhook mode
+            webhook_url = f"{render_url}/webhook"
+            logger.info(f"🌐 Webhook mode - URL: {webhook_url}")
             
-            logger.info("🔧 Starting webhook server...")
             application.run_webhook(
                 listen="0.0.0.0",
                 port=port,
-                webhook_url=webhook_full_url,
+                webhook_url=webhook_url,
                 url_path="/webhook",
                 drop_pending_updates=True
             )
         else:
-            # Polling mode for development
+            # Development polling mode
             logger.info("💻 Polling mode")
             application.run_polling(allowed_updates=Update.ALL_TYPES)
             
-    except ImportError as e:
-        logger.error(f"❌ Import error: {e}")
-        logger.error("Full traceback:")
-        traceback.print_exc()
-        sys.exit(1)
     except Exception as e:
-        logger.error(f"❌ Unexpected error in main(): {e}")
-        logger.error("Full traceback:")
+        logger.error(f"❌ Bot startup failed: {e}")
         traceback.print_exc()
         sys.exit(1)
 
 if __name__ == '__main__':
-    try:
-        main()
-    except KeyboardInterrupt:
-        logger.info("🛑 Bot stopped by user")
-    except Exception as e:
-        logger.error(f"❌ Critical error: {e}")
-        traceback.print_exc()
-        sys.exit(1)
+    main()

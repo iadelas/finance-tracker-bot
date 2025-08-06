@@ -8,12 +8,13 @@ TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
 
 # API Keys
 GEMINI_API_KEY = os.getenv('GEMINI_API_KEY')
-OCR_API_KEY = os.getenv('OCR_API_KEY')
 
-# Google Sheets Configuration
+# Google Services Configuration
 GOOGLE_SHEET_ID = os.getenv('GOOGLE_SHEET_ID')
 GOOGLE_CREDENTIALS_FILE = os.getenv('GOOGLE_CREDENTIALS_FILE', 'credentials.json')
 
 # Validate critical variables
 if not TELEGRAM_BOT_TOKEN:
     print("WARNING: TELEGRAM_BOT_TOKEN not found in environment variables")
+if not GEMINI_API_KEY:
+    print("WARNING: GEMINI_API_KEY not found in environment variables")

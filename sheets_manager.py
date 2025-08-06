@@ -55,13 +55,12 @@ class SheetsManager:
             return False
     
     def add_expense(self, expense_data):
-        """Add expense to Google Sheet with better error handling"""
+        """Add expense with detailed error logging"""
         if not self.service:
             print("❌ Google Sheets service not available")
             return False
         
         try:
-            # Prepare row data
             row_data = [
                 datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                 expense_data.get('description', ''),
@@ -71,11 +70,12 @@ class SheetsManager:
                 expense_data.get('source', 'Telegram')
             ]
             
-            # Append to sheet
-            request_body = {
-                'values': [row_data]
-            }
+            request_body = {'values': [row_data]}
             
+            print(f"🔄 Attempting to write to sheet: {self.sheet_id}")
+            print(f"📊 Data to write: {row_data}")
+            
+            # Make the request with timeout handling
             result = self.service.spreadsheets().values().append(
                 spreadsheetId=self.sheet_id,
                 range='Sheet1!A:F',
@@ -84,12 +84,15 @@ class SheetsManager:
                 body=request_body
             ).execute()
             
-            print(f"✅ Added expense to sheet: {expense_data.get('description')}")
+            print(f"✅ Google Sheets response: {result}")
             return True
             
         except Exception as e:
-            print(f"❌ Error adding to sheet: {e}")
-            print(f"📊 Attempted data: {row_data}")
+            print(f"❌ Google Sheets error details: {e}")
+            print(f"❌ Error type: {type(e).__name__}")
+            # Print more detailed error info
+            import traceback
+            traceback.print_exc()
             return False
     
     def get_monthly_summary(self):
@@ -127,3 +130,24 @@ class SheetsManager:
         except Exception as e:
             print(f"❌ Error getting summary: {e}")
             return f"❌ Error getting summary: {str(e)}"
+
+    def test_direct_write(self):
+        """Test direct write to verify permissions"""
+        try:
+            # Simple test write
+            test_data = [['TEST', datetime.now().strftime('%Y-%m-%d %H:%M:%S'), 'API_TEST']]
+            
+            result = self.service.spreadsheets().values().append(
+                spreadsheetId=self.sheet_id,
+                range='Sheet1!A:C',
+                valueInputOption='RAW',
+                insertDataOption='INSERT_ROWS',
+                body={'values': test_data}
+            ).execute()
+            
+            print(f"✅ Direct test successful: {result.get('updates', {})}")
+            return True
+            
+        except Exception as e:
+            print(f"❌ Direct test failed: {e}")
+            return False

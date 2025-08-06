@@ -145,24 +145,17 @@ async def handle_photo(update: Update, context: CallbackContext):
         await processing_msg.edit_text("❌ Gagal memproses foto struk")
 
 def main():
-    """Main function with webhook support for production"""
+    """Main function with forced webhook mode for Render"""
     if not TELEGRAM_BOT_TOKEN:
         logger.error("❌ TELEGRAM_BOT_TOKEN not found!")
         return
     
-    # Get deployment environment info
     port = int(os.environ.get('PORT', 8000))
-    webhook_url = os.environ.get('RENDER_EXTERNAL_URL')
     
-    # Create application with optimized request handler
-    request = HTTPXRequest(
-        connection_pool_size=20,
-        read_timeout=30,
-        write_timeout=30,
-        connect_timeout=30
-    )
+    # Force webhook mode on Render
+    is_render = os.environ.get('RENDER') or os.environ.get('RENDER_EXTERNAL_URL')
     
-    application = Application.builder().token(TELEGRAM_BOT_TOKEN).request(request).build()
+    application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
     
     # Add handlers
     application.add_handler(CommandHandler("start", start))
@@ -171,28 +164,21 @@ def main():
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
     application.add_handler(MessageHandler(filters.PHOTO, handle_photo))
     
-    # Production vs Development mode
-    if webhook_url:
-        # Production mode (Render) - use webhooks
-        logger.info("🌐 Production mode - Running with webhooks")
+    if is_render:
+        # Production/Render mode - ALWAYS use webhooks
+        webhook_url = os.environ.get('RENDER_EXTERNAL_URL', f'https://your-app-name.onrender.com')
+        logger.info("🌐 Render detected - Running with webhooks")
         logger.info(f"🔗 Webhook URL: {webhook_url}/webhook")
-        logger.info(f"🚀 Server starting on port {port}")
         
         application.run_webhook(
             listen="0.0.0.0",
             port=port,
             webhook_url=f"{webhook_url}/webhook",
             url_path="/webhook",
-            # Health check endpoint
             drop_pending_updates=True
         )
     else:
-        # Development mode - use polling
-        logger.info("💻 Development mode - Running with polling")
-        application.run_polling(
-            allowed_updates=Update.ALL_TYPES,
-            drop_pending_updates=True
-        )
+        # Local development - use polling
+        logger.info("💻 Local mode - Running with polling")
+        application.run_polling(allowed_updates=Update.ALL_TYPES)
 
-if __name__ == '__main__':
-    main()

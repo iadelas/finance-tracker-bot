@@ -168,57 +168,96 @@ async def handle_photo(update: Update, context: CallbackContext):
 
 async def handle_text(update: Update, context: CallbackContext):
     user_text = update.message.text
+    message_date = update.message.date  # Get message timestamp
+    user_name = update.message.from_user.username or update.message.from_user.first_name
+    
     processing_msg = await update.message.reply_text("🔄 Memproses pengeluaran...")
     
     try:
-        # Try AI processing first
+        # Pass message date and username to AI processor
         if ai_processor:
-            expense_data = ai_processor.parse_expense_text(user_text)
+            expense_data = ai_processor.parse_expense_text(user_text, message_date, user_name)
         else:
             expense_data = {'error': 'AI processor not available'}
         
-        # If AI fails, use fallback parsing
         if expense_data.get('error'):
-            expense_data = parse_expense_fallback(user_text)
+            expense_data = parse_expense_fallback(user_text, message_date, user_name)
             expense_data['source'] = 'Fallback Parser'
         else:
             expense_data['source'] = 'Gemini AI'
         
-        # Try to save to sheets
-        if sheets_manager:
-            success = sheets_manager.add_expense(expense_data)
-        else:
-            success = False
+        success = sheets_manager.add_expense(expense_data) if sheets_manager else False
         
         if success:
             response = f"""
 ✅ **Pengeluaran berhasil dicatat!**
 
 📝 **Detail:**
+• **Tanggal:** {expense_data.get('transaction_date')}
 • **Deskripsi:** {expense_data.get('description', 'N/A')}
 • **Jumlah:** Rp {expense_data.get('amount', 0):,.0f}
 • **Lokasi:** {expense_data.get('location', 'N/A')}
 • **Kategori:** {expense_data.get('category', 'N/A')}
-• **Parser:** {expense_data.get('source', 'Unknown')}
+• **Input oleh:** {expense_data.get('input_by', 'N/A')}
 
 💾 Data tersimpan di Google Sheets
             """
         else:
-            response = f"""
-⚠️ **Data diproses tapi gagal menyimpan**
-
-📝 **Detail yang diparsing:**
-• **Deskripsi:** {expense_data.get('description', 'N/A')}
-• **Jumlah:** Rp {expense_data.get('amount', 0):,.0f}
-
-❌ Masalah koneksi Google Sheets
-            """
+            response = f"❌ Gagal menyimpan ke Google Sheets"
         
         await processing_msg.edit_text(response, parse_mode='Markdown')
         
     except Exception as e:
         logger.error(f"Error processing text: {e}")
         await processing_msg.edit_text("❌ Terjadi kesalahan saat memproses")
+
+async def handle_photo(update: Update, context: CallbackContext):
+    """Handle photo with receipt date priority"""
+    user_name = update.message.from_user.username or update.message.from_user.first_name
+    processing_msg = await update.message.reply_text("📷 Memproses foto struk...")
+    
+    try:
+        photo_file = await update.message.photo[-1].get_file()
+        photo_path = "temp_receipt.jpg"
+        await photo_file.download_to_drive(photo_path)
+        
+        if ocr_processor:
+            ocr_text = ocr_processor.extract_text_from_image(photo_path)
+            # TODO: Extract receipt date from OCR text if possible
+            receipt_date = update.message.date  # For now, use message date
+            
+            expense_data = ai_processor.parse_receipt_data(ocr_text, receipt_date, user_name)
+        else:
+            await processing_msg.edit_text("❌ OCR processor not available")
+            return
+        
+        if os.path.exists(photo_path):
+            os.remove(photo_path)
+        
+        success = sheets_manager.add_expense(expense_data) if sheets_manager else False
+        
+        if success:
+            response = f"""
+✅ **Struk berhasil diproses!**
+
+📝 **Detail dari foto:**
+• **Tanggal:** {expense_data.get('transaction_date')}
+• **Deskripsi:** {expense_data.get('description', 'N/A')}
+• **Jumlah:** Rp {expense_data.get('amount', 0):,.0f}
+• **Lokasi:** {expense_data.get('location', 'N/A')}
+• **Input oleh:** {expense_data.get('input_by', 'N/A')}
+
+📸 Sumber: Receipt OCR
+            """
+        else:
+            response = "❌ Gagal menyimpan data struk"
+        
+        await processing_msg.edit_text(response, parse_mode='Markdown')
+        
+    except Exception as e:
+        logger.error(f"Error processing photo: {e}")
+        await processing_msg.edit_text("❌ Gagal memproses foto struk")
+
 
 def parse_expense_fallback(text):
     """Simple regex-based expense parser as fallback"""

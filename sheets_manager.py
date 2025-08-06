@@ -1,4 +1,3 @@
-import json
 from datetime import datetime
 from googleapiclient.discovery import build
 from google.oauth2.service_account import Credentials
@@ -9,14 +8,12 @@ class SheetsManager:
         self.sheet_id = GOOGLE_SHEET_ID
         self.service = self._get_service()
         
-        # Test permissions on startup
         if self.service:
             self.test_sheet_permissions()
     
     def _get_service(self):
-        """Initialize Google Sheets service with proper scopes"""
+        """Initialize Google Sheets service"""
         try:
-            # Use comprehensive scopes
             scopes = [
                 'https://www.googleapis.com/auth/spreadsheets',
                 'https://www.googleapis.com/auth/drive.file'
@@ -31,9 +28,6 @@ class SheetsManager:
             print("✅ Google Sheets service initialized")
             return service
             
-        except FileNotFoundError:
-            print(f"❌ Credentials file not found: {GOOGLE_CREDENTIALS_FILE}")
-            return None
         except Exception as e:
             print(f"❌ Sheets service error: {e}")
             return None
@@ -51,23 +45,23 @@ class SheetsManager:
             
         except Exception as e:
             print(f"❌ Sheet permissions test failed: {e}")
-            print("💡 Make sure to share your Google Sheet with the service account email")
             return False
     
     def add_expense(self, expense_data):
-        """Add expense with correct sheet name"""
+        """Add expense with new column structure"""
         if not self.service:
             print("❌ Google Sheets service not available")
             return False
         
         try:
+            # Updated row structure: Date, Description, Amount, Category, Location, Input By
             row_data = [
-                datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                expense_data.get('description', ''),
-                expense_data.get('amount', 0),
-                expense_data.get('category', ''),
-                expense_data.get('location', ''),
-                expense_data.get('source', 'Telegram')
+                expense_data.get('transaction_date', datetime.now().strftime('%Y-%m-%d')),  # Transaction Date
+                expense_data.get('description', ''),                                        # Description
+                expense_data.get('amount', 0),                                             # Amount
+                expense_data.get('category', 'Other'),                                     # Category
+                expense_data.get('location', 'Unknown'),                                   # Location/Merchant
+                expense_data.get('input_by', 'Unknown')                                    # Input By
             ]
             
             request_body = {'values': [row_data]}
@@ -76,7 +70,7 @@ class SheetsManager:
             
             result = self.service.spreadsheets().values().append(
                 spreadsheetId=self.sheet_id,
-                range='Catatan!A:F',  # Changed from 'Sheet1!A:F' to 'Catatan!A:F'
+                range='Catatan!A:F',  # A=Date, B=Description, C=Amount, D=Category, E=Location, F=InputBy
                 valueInputOption='RAW',
                 insertDataOption='INSERT_ROWS',
                 body=request_body
@@ -87,25 +81,25 @@ class SheetsManager:
             
         except Exception as e:
             print(f"❌ Error adding to sheet: {e}")
+            import traceback
+            traceback.print_exc()
             return False
-
+    
     def get_monthly_summary(self):
-        """Get current month expense summary from Catatan sheet"""
+        """Get current month expense summary"""
         if not self.service:
             return "Google Sheets not available"
         
         try:
-            # Get all data from Catatan sheet
             result = self.service.spreadsheets().values().get(
                 spreadsheetId=self.sheet_id,
-                range='Catatan!A:F'  # Changed from 'Sheet1!A:F'
+                range='Catatan!A:F'
             ).execute()
             
             rows = result.get('values', [])
             if len(rows) <= 1:
                 return "📊 **Ringkasan Bulan Ini:**\nBelum ada data pengeluaran"
             
-            # Calculate current month total
             current_month = datetime.now().strftime("%Y-%m")
             total_amount = 0
             count = 0
@@ -124,24 +118,3 @@ class SheetsManager:
         except Exception as e:
             print(f"❌ Error getting summary: {e}")
             return f"❌ Error getting summary: {str(e)}"
-
-    def test_direct_write(self):
-        """Test direct write to verify permissions"""
-        try:
-            # Simple test write
-            test_data = [['TEST', datetime.now().strftime('%Y-%m-%d %H:%M:%S'), 'API_TEST']]
-            
-            result = self.service.spreadsheets().values().append(
-                spreadsheetId=self.sheet_id,
-                range='Sheet1!A:C',
-                valueInputOption='RAW',
-                insertDataOption='INSERT_ROWS',
-                body={'values': test_data}
-            ).execute()
-            
-            print(f"✅ Direct test successful: {result.get('updates', {})}")
-            return True
-            
-        except Exception as e:
-            print(f"❌ Direct test failed: {e}")
-            return False

@@ -28,12 +28,11 @@ except Exception as e:
 try:
     logger.info("🔧 Initializing Vision processor...")
     vision_processor = VisionProcessor()
-    
-    # Test Vision API permissions on startup
-    if vision_processor.test_vision_permissions():
-        logger.info("✅ Vision processor initialized and tested")
+
+    if hasattr(vision_processor, 'vision_client') and vision_processor.vision_client:
+        logger.info("✅ Vision processor initialized")
     else:
-        logger.warning("⚠️ Vision processor initialized but permissions test failed")
+        logger.warning("⚠️ Vision processor initialized but Vision API client unavailable")
         
 except Exception as e:
     logger.error(f"❌ Vision processor failed: {e}")

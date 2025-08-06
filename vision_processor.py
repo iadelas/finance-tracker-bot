@@ -1,7 +1,7 @@
 import os
 import json
 import re
-from datetime import datetime, timedelta
+from datetime import datetime
 from google.cloud import vision
 from google.oauth2.service_account import Credentials
 import google.generativeai as genai
@@ -38,7 +38,7 @@ class VisionProcessor:
             return {'error': 'Vision API not available'}
         
         try:
-            # Step 1: Extract text using Vision API
+            # Extract text using Vision API
             with open(image_path, 'rb') as image_file:
                 content = image_file.read()
             
@@ -53,16 +53,13 @@ class VisionProcessor:
             if not raw_text.strip():
                 return {'error': 'No text found in receipt'}
             
-            print(f"📄 OCR extracted {len(raw_text)} characters")
-            
-            # Step 2: Parse with Gemini AI (preferred method)
+            # Parse with Gemini AI (preferred method)
             if self.gemini_model:
                 receipt_data = self._parse_with_gemini(raw_text, message_date, user_name)
                 if not receipt_data.get('error'):
                     return receipt_data
-                print("⚠️ Gemini parsing failed, using fallback")
             
-            # Step 3: Fallback to regex parsing
+            # Fallback to regex parsing
             return self._parse_with_regex(raw_text, message_date, user_name)
             
         except Exception as e:
@@ -126,18 +123,15 @@ class VisionProcessor:
             receipt_data['description'] = receipt_data['description'].capitalize()
             receipt_data['location'] = receipt_data['location'].title()
             
-            print(f"🤖 Gemini parsed: {ai_result.get('merchant')} - Rp {receipt_data['amount']:,.0f}")
             return receipt_data
             
         except json.JSONDecodeError as e:
-            print(f"❌ JSON parsing error: {e}")
             return {'error': 'Invalid AI response format'}
         except Exception as e:
-            print(f"❌ Gemini parsing error: {e}")
             return {'error': f'AI parsing failed: {str(e)}'}
 
     def _parse_with_regex(self, raw_text, message_date, user_name):
-        """Fallback regex-based parsing for when Gemini fails"""
+        """Fallback regex-based parsing"""
         receipt_data = {
             'description': 'Receipt purchase',
             'amount': 0,
@@ -191,7 +185,6 @@ class VisionProcessor:
         """Clean and validate amount value"""
         try:
             if isinstance(amount, str):
-                # Handle string amounts
                 clean = re.sub(r'[^\d]', '', amount)
                 return float(clean) if clean else 0
             elif isinstance(amount, (int, float)):

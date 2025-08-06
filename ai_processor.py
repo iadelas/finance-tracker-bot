@@ -183,7 +183,7 @@ Examples:
         }
         
         # Check for explicit relative dates
-        if any(word in text_lower for word in date_patterns['kemarin','kmrn','yesterday']):
+        if any(word in text_lower for word in date_patterns['yesterday']):
             return (message_date - timedelta(days=1)).strftime('%Y-%m-%d')
         
         if any(word in text_lower for word in date_patterns['day_before_yesterday']):

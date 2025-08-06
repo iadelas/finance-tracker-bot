@@ -1,7 +1,10 @@
 import logging
 import os
+import signal
+import sys
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, CallbackContext
+from telegram.error import Conflict, NetworkError
 from ai_processor import AIProcessor
 from ocr_processor import OCRProcessor
 from sheets_manager import SheetsManager
@@ -157,30 +160,49 @@ async def handle_photo(update: Update, context: CallbackContext):
         logger.error(f"Error processing photo: {e}")
         await processing_msg.edit_text("❌ Gagal memproses foto struk")
 
+def signal_handler(sig, frame):
+    print('🛑 Bot shutting down gracefully...')
+    sys.exit(0)
+
 def main():
-    """Main function - Production ready"""
     if not TELEGRAM_BOT_TOKEN:
         logger.error("TELEGRAM_BOT_TOKEN not found!")
         return
     
-    # Create application (SSL works perfectly on Render)
-    application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
+    # Handle shutdown signals
+    signal.signal(signal.SIGINT, signal_handler)
+    signal.signal(signal.SIGTERM, signal_handler)
     
-    # Add handlers
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(CommandHandler("help", help_command))
-    application.add_handler(CommandHandler("summary", summary_command))
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
-    application.add_handler(MessageHandler(filters.PHOTO, handle_photo))
-    
-    # Get port for Render deployment
-    port = int(os.environ.get('PORT', 5000))
-    
-    logger.info("Starting Finance Tracker Bot...")
-    print(f"🤖 Bot starting on port {port}")
-    
-    # Run bot
-    application.run_polling(allowed_updates=Update.ALL_TYPES)
+    try:
+        application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
+        
+        # Add all your handlers here...
+        application.add_handler(CommandHandler("start", start))
+        application.add_handler(CommandHandler("help", help_command))
+        application.add_handler(CommandHandler("summary", summary_command))
+        application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
+        application.add_handler(MessageHandler(filters.PHOTO, handle_photo))
+        
+        logger.info("🚀 Starting Finance Tracker Bot...")
+        print("🤖 Bot starting on port 10000 - single instance mode")
+        
+        # Run with conflict handling
+        application.run_polling(
+            allowed_updates=Update.ALL_TYPES,
+            drop_pending_updates=True,  # Clear any pending updates
+            close_loop=False
+        )
+        
+    except Conflict as e:
+        logger.error(f"❌ Telegram conflict error: {e}")
+        print("❌ Another bot instance is running. Terminating...")
+        sys.exit(1)
+    except NetworkError as e:
+        logger.error(f"❌ Network error: {e}")
+        sys.exit(1)
+    except Exception as e:
+        logger.error(f"❌ Unexpected error: {e}")
+        sys.exit(1)
 
 if __name__ == '__main__':
     main()

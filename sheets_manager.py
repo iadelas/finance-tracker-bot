@@ -12,9 +12,15 @@ class SheetsManager:
     def _get_service(self):
         """Initialize Google Sheets service"""
         try:
+            # Use the broader spreadsheets scope
+            scopes = [
+                'https://www.googleapis.com/auth/spreadsheets',
+                'https://www.googleapis.com/auth/drive.file'  # Add drive access
+            ]
+            
             credentials = Credentials.from_service_account_file(
                 GOOGLE_CREDENTIALS_FILE,
-                scopes=['https://www.googleapis.com/auth/spreadsheets']
+                scopes=scopes
             )
             return build('sheets', 'v4', credentials=credentials)
         except Exception as e:

@@ -101,7 +101,7 @@ class VisionProcessor:
             return {'error': f'Failed to process receipt: {str(e)}'}
     
     def _parse_receipt_structure(self, full_text, message_date, user_name):
-        """Enhanced Indonesian receipt parsing"""
+        """Smart Indonesian receipt parsing with context-aware extraction"""
         
         # Initialize result
         receipt_data = {
@@ -117,103 +117,260 @@ class VisionProcessor:
         lines = [line.strip() for line in full_text.split('\n') if line.strip()]
         text_lower = full_text.lower()
         
-        print(f"🔍 RAW OCR TEXT:\n{full_text}")  # Debug output
-        print(f"🔍 LINES: {lines[:10]}")  # First 10 lines
+        print(f"🔍 RAW OCR TEXT:\n{full_text}")
+        print(f"🔍 LINES: {lines}")
         
-        # 1. ENHANCED MERCHANT DETECTION
-        merchant_keywords = ['toko', 'store', 'mart', 'shop', 'cafe', 'restaurant', 'breadtalk', 'kfc', 'mcd']
+        # 1. SMART MERCHANT DETECTION - Look for business patterns
+        merchant_found = self._extract_merchant_name(lines)
+        if merchant_found:
+            receipt_data['location'] = merchant_found
+            print(f"🏪 MERCHANT: {merchant_found}")
         
-        for i, line in enumerate(lines[:5]):  # Check first 5 lines
-            line_clean = line.lower().strip()
-            
-            # Skip obvious non-merchant lines
-            if any(skip in line_clean for skip in ['receipt', 'struk', 'bon', 'kasir', 'total', 'tax']):
-                continue
-                
-            # Skip lines with only numbers/dates
-            if re.match(r'^[\d\s\-/:.,]+$', line_clean):
-                continue
-                
-            # Skip very short lines (less than 3 chars)
-            if len(line_clean) < 3:
-                continue
-                
-            # Prefer lines with known merchant keywords
-            if any(keyword in line_clean for keyword in merchant_keywords) or len(line_clean) > 4:
-                receipt_data['location'] = line.title()
-                print(f"🏪 MERCHANT FOUND: {line}")
-                break
+        # 2. CONTEXT-AWARE TOTAL AMOUNT EXTRACTION
+        total_amount = self._extract_total_amount(lines, full_text)
+        if total_amount > 0:
+            receipt_data['amount'] = total_amount
+            print(f"💰 TOTAL AMOUNT: Rp {total_amount:,.0f}")
         
-        # 2. ENHANCED AMOUNT EXTRACTION
-        amount_patterns = [
-            # Indonesian total patterns
-            r'(?:total|subtotal|jumlah|amount|grand total)[:.\s]*rp?\.?\s*(\d{1,3}(?:[.,]\d{3})*)',
-            r'total\s*[:.]?\s*(\d{1,3}(?:[.,]\d{3})*)',
-            
-            # Price at end of line patterns  
-            r'(\d{1,3}(?:[.,]\d{3})*)\s*$',
-            
-            # Rp prefix patterns
-            r'rp\.?\s*(\d{1,3}(?:[.,]\d{3})*)',
-            
-            # Large numbers (likely totals)
-            r'(\d{2,3}[.,]\d{3})',  # Indonesian format: 43,500 or 43.500
-            r'(\d{4,})',            # Any 4+ digit number
-        ]
-        
-        amounts = []
-        
-        for pattern in amount_patterns:
-            matches = re.findall(pattern, text_lower, re.MULTILINE)
-            for match in matches:
-                try:
-                    # Handle Indonesian number formatting
-                    clean_amount = match.replace(',', '').replace('.', '')
-                    
-                    # Convert to number
-                    if len(clean_amount) >= 3:  # Reasonable amount
-                        amount_val = float(clean_amount)
-                        amounts.append(amount_val)
-                        print(f"💰 AMOUNT FOUND: {match} → {amount_val}")
-                except ValueError:
-                    continue
-        
-        if amounts:
-            # Take the largest amount (most likely the total)
-            receipt_data['amount'] = max(amounts)
-            print(f"💰 FINAL AMOUNT: {receipt_data['amount']}")
-        
-        # 3. ENHANCED DATE EXTRACTION
-        receipt_date = self._extract_receipt_date_enhanced(full_text, message_date)
+        # 3. SMART DATE EXTRACTION
+        receipt_date = self._extract_receipt_date_smart(full_text, message_date)
         if receipt_date:
             receipt_data['transaction_date'] = receipt_date
-            print(f"📅 DATE FOUND: {receipt_date}")
+            print(f"📅 DATE: {receipt_date}")
         
-        # 4. SMART CATEGORIZATION
+        # 4. CATEGORY BASED ON MERCHANT
         receipt_data['category'] = self._categorize_receipt_enhanced(receipt_data['location'], full_text)
-        print(f"🏷️ CATEGORY: {receipt_data['category']}")
         
-        # 5. BETTER DESCRIPTION
+        # 5. DESCRIPTION
         if receipt_data['location'] != 'Unknown':
             receipt_data['description'] = f"Purchase at {receipt_data['location']}"
-        else:
-            # Extract main items
-            item_lines = []
-            for line in lines[2:8]:  # Skip header, check middle lines
-                if (len(line) > 3 and 
-                    not re.search(r'^\d+[/-]\d+', line) and 
-                    not any(word in line.lower() for word in ['total', 'subtotal', 'tax', 'kasir'])):
-                    item_lines.append(line.title())
-            
-            if item_lines:
-                receipt_data['description'] = item_lines[0][:50]
         
-        # Ensure proper capitalization
+        # Proper capitalization
         receipt_data['description'] = receipt_data['description'].capitalize()
         receipt_data['location'] = receipt_data['location'].capitalize()
         
-        print(f"✅ PARSED RESULT: {receipt_data}")
+        print(f"✅ FINAL RESULT: {receipt_data}")
         return receipt_data
+
+    def _extract_merchant_name(self, lines):
+        """Extract merchant name using business logic"""
+        
+        # Skip patterns that are definitely NOT merchant names
+        skip_patterns = [
+            r'^\d+$',                    # Pure numbers
+            r'^[\d\s\-/:.,]+$',         # Dates/times/numbers only
+            r'^\d{10,}$',               # Phone numbers (10+ digits)
+            r'^(receipt|struk|bon)$',   # Receipt headers
+            r'kasir|cashier',           # Cashier info
+            r'^(total|subtotal|tax)$',  # Financial terms
+            r'^\d{2,4}[-/]\d{1,2}[-/]\d{1,4}$',  # Dates
+            r'^\d{1,2}:\d{2}',          # Times
+            r'^[A-Z]{2,3}\d+$',         # Reference codes like TX123
+        ]
+        
+        # Look for merchant in first 5 lines (header area)
+        for i, line in enumerate(lines[:5]):
+            line_clean = line.strip()
+            
+            # Skip if line matches any skip pattern
+            if any(re.match(pattern, line_clean, re.IGNORECASE) for pattern in skip_patterns):
+                continue
+            
+            # Skip very short lines (less than 3 chars)
+            if len(line_clean) < 3:
+                continue
+            
+            # Prefer longer, meaningful business names
+            if len(line_clean) >= 4:
+                # Check if it looks like a business name
+                if re.search(r'[a-zA-Z]{3,}', line_clean):  # At least 3 letters
+                    print(f"🏪 MERCHANT CANDIDATE: '{line_clean}' (line {i})")
+                    return line_clean.title()
+        
+        return "Unknown"
+
+    def _extract_total_amount(self, lines, full_text):
+        """Smart total amount extraction with context awareness"""
+        
+        amounts = []
+        
+        # Strategy 1: Look for explicit TOTAL lines with context
+        total_indicators = ['total', 'grand total', 'subtotal', 'jumlah', 'amount due']
+        
+        for i, line in enumerate(lines):
+            line_lower = line.lower()
+            
+            # Check if line contains total indicator
+            for indicator in total_indicators:
+                if indicator in line_lower:
+                    # Extract number from this line
+                    amount_match = re.search(r'(\d{1,3}(?:[.,]\d{3})*(?:[.,]\d{2})?)', line)
+                    if amount_match:
+                        amount_str = amount_match.group(1)
+                        amount_val = self._parse_indonesian_number(amount_str)
+                        if amount_val and amount_val >= 100:  # Reasonable minimum
+                            amounts.append(('total_line', amount_val, line))
+                            print(f"💰 TOTAL LINE: '{line}' → {amount_val}")
+        
+        # Strategy 2: Look for amounts at the END of receipt (bottom lines)
+        # Total is usually in the last 3-5 lines
+        for i, line in enumerate(lines[-5:], len(lines)-5):
+            line_lower = line.lower()
+            
+            # Skip if line has obvious non-total indicators
+            if any(word in line_lower for word in ['phone', 'hp', 'tel', 'wa', 'whatsapp', 'contact']):
+                print(f"📞 SKIP PHONE LINE: '{line}'")
+                continue
+            
+            if any(word in line_lower for word in ['ref', 'invoice', 'receipt', 'cashier', 'kasir']):
+                continue
+            
+            # Look for standalone numbers (likely totals)
+            amount_matches = re.findall(r'(\d{1,3}(?:[.,]\d{3})*)', line)
+            for amount_str in amount_matches:
+                amount_val = self._parse_indonesian_number(amount_str)
+                if amount_val and amount_val >= 100:  # Filter small numbers
+                    amounts.append(('bottom_line', amount_val, line))
+                    print(f"💰 BOTTOM LINE: '{line}' → {amount_val}")
+        
+        # Strategy 3: Look for Rp prefix patterns
+        rp_patterns = [
+            r'rp\.?\s*(\d{1,3}(?:[.,]\d{3})*)',
+            r'(\d{1,3}(?:[.,]\d{3})*)\s*rp',
+        ]
+        
+        for pattern in rp_patterns:
+            matches = re.findall(pattern, full_text.lower())
+            for amount_str in matches:
+                amount_val = self._parse_indonesian_number(amount_str)
+                if amount_val and amount_val >= 100:
+                    amounts.append(('rp_pattern', amount_val, f"Rp {amount_str}"))
+                    print(f"💰 RP PATTERN: Rp {amount_str} → {amount_val}")
+        
+        if not amounts:
+            print("⚠️ NO AMOUNTS FOUND")
+            return 0
+        
+        # SMART SELECTION: Prioritize by context and value
+        print(f"🔍 ALL AMOUNTS FOUND: {amounts}")
+        
+        # Priority 1: Explicit total lines
+        total_line_amounts = [amt for source, amt, line in amounts if source == 'total_line']
+        if total_line_amounts:
+            selected = max(total_line_amounts)
+            print(f"✅ SELECTED (total line): {selected}")
+            return selected
+        
+        # Priority 2: Bottom line amounts (but filter out obvious phone numbers)
+        bottom_amounts = []
+        for source, amt, line in amounts:
+            if source == 'bottom_line':
+                # Filter out phone number patterns
+                if not re.search(r'\b\d{10,}\b', line):  # Not 10+ digit sequences
+                    bottom_amounts.append(amt)
+        
+        if bottom_amounts:
+            selected = max(bottom_amounts)
+            print(f"✅ SELECTED (bottom line): {selected}")
+            return selected
+        
+        # Priority 3: Rp patterns
+        rp_amounts = [amt for source, amt, line in amounts if source == 'rp_pattern']
+        if rp_amounts:
+            selected = max(rp_amounts)
+            print(f"✅ SELECTED (rp pattern): {selected}")
+            return selected
+        
+        # Fallback: Largest reasonable amount
+        all_amounts = [amt for source, amt, line in amounts if 100 <= amt <= 10000000]  # Reasonable range
+        if all_amounts:
+            selected = max(all_amounts)
+            print(f"✅ SELECTED (largest): {selected}")
+            return selected
+        
+        print("❌ NO VALID AMOUNT FOUND")
+        return 0
+
+    def _parse_indonesian_number(self, number_str):
+        """Parse Indonesian number format (handles both . and , as thousands separator)"""
+        try:
+            # Remove all separators and convert to float
+            clean_number = re.sub(r'[.,]', '', number_str)
+            return float(clean_number)
+        except (ValueError, AttributeError):
+            return None
+
+    def _extract_receipt_date_smart(self, text, fallback_date):
+        """Smart date extraction with better pattern recognition"""
+        
+        date_patterns = [
+            # Indonesian receipt formats
+            (r'(\d{1,2})\s+(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec|januari|februari|maret|april|mei|juni|juli|agustus|september|oktober|november|desember)\s+(\d{2,4})', 'month_name'),
+            
+            # Standard date formats
+            (r'(\d{1,2})[/-](\d{1,2})[/-](\d{2,4})', 'dmy'),
+            (r'(\d{2,4})[/-](\d{1,2})[/-](\d{1,2})', 'ymd'),
+            
+            # Date with time context
+            (r'(\d{1,2}[/-]\d{1,2}[/-]\d{2,4})\s+\d{1,2}:\d{2}', 'datetime'),
+        ]
+        
+        for pattern, format_type in date_patterns:
+            match = re.search(pattern, text, re.IGNORECASE)
+            if match:
+                try:
+                    if format_type == 'month_name':
+                        day, month, year = match.groups()
+                        month_map = {
+                            'jan': 1, 'januari': 1, 'feb': 2, 'februari': 2, 'mar': 3, 'maret': 3,
+                            'apr': 4, 'april': 4, 'may': 5, 'mei': 5, 'jun': 6, 'juni': 6,
+                            'jul': 7, 'juli': 7, 'aug': 8, 'agustus': 8, 'sep': 9, 'september': 9,
+                            'oct': 10, 'oktober': 10, 'nov': 11, 'november': 11, 'dec': 12, 'desember': 12
+                        }
+                        
+                        if month.lower() in month_map:
+                            month_num = month_map[month.lower()]
+                            day_num = int(day)
+                            year_num = int(year)
+                            
+                            if year_num < 100:
+                                year_num += 2000 if year_num < 50 else 1900
+                            
+                            if 1 <= day_num <= 31 and 1 <= month_num <= 12 and 2000 <= year_num <= 2030:
+                                date_found = f"{year_num:04d}-{month_num:02d}-{day_num:02d}"
+                                print(f"📅 DATE PATTERN FOUND: '{match.group()}' → {date_found}")
+                                return date_found
+                    
+                    elif format_type in ['dmy', 'ymd', 'datetime']:
+                        # Handle numeric date formats
+                        if format_type == 'datetime':
+                            date_part = match.group(1)
+                            parts = re.split(r'[/-]', date_part)
+                        else:
+                            parts = match.groups()
+                        
+                        if len(parts) == 3:
+                            if format_type == 'ymd':
+                                year, month, day = map(int, parts)
+                            else:  # dmy format (more common in Indonesia)
+                                day, month, year = map(int, parts)
+                            
+                            if year < 100:
+                                year += 2000 if year < 50 else 1900
+                            
+                            if 1 <= day <= 31 and 1 <= month <= 12 and 2000 <= year <= 2030:
+                                date_found = f"{year:04d}-{month:02d}-{day:02d}"
+                                print(f"📅 DATE PATTERN FOUND: '{match.group()}' → {date_found}")
+                                return date_found
+                                
+                except (ValueError, IndexError):
+                    continue
+        
+        # Return fallback date if no valid date found
+        fallback_naive = self._normalize_datetime(fallback_date)
+        fallback_str = fallback_naive.strftime('%Y-%m-%d')
+        print(f"📅 USING FALLBACK DATE: {fallback_str}")
+        return fallback_str
 
     def _extract_receipt_date_enhanced(self, text, fallback_date):
         """Enhanced date extraction for Indonesian receipts"""

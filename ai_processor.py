@@ -1,7 +1,7 @@
 import google.generativeai as genai
 import json
 import re
-from datetime import datetime
+from datetime import datetime, timedelta
 from config import GEMINI_API_KEY
 
 class AIProcessor:
@@ -15,32 +15,44 @@ class AIProcessor:
         print("✅ Gemini AI initialized with gemini-1.5-flash")
     
     def parse_expense_text(self, text, message_date=None, user_name=None):
-        """Parse expense text with date handling and proper capitalization"""
+        """Parse expense text with enhanced date handling and proper capitalization"""
         if not hasattr(self, 'model'):
             return {'error': 'Gemini API not initialized'}
         
         try:
+            # Pre-process text for better AI understanding
+            processed_text = self._preprocess_date_context(text, message_date)
+            
             prompt = f"""
             Extract expense information from this Indonesian text: "{text}"
+            Context: Message sent on {message_date.strftime('%A, %Y-%m-%d') if message_date else 'unknown date'}
             
             Return JSON format:
             {{
                 "description": "brief description (capitalize first letter)",
                 "amount": numeric_amount,
-                "location": "store/place name (capitalize first letter)",
+                "location": "store/place name (capitalize first letter)", 
                 "category": "Food/Transport/Utilities/Shopping/Health/Entertainment/Other",
-                "date": "YYYY-MM-DD format if mentioned, otherwise null"
+                "date": "YYYY-MM-DD format if specific date mentioned, otherwise null"
             }}
+            
+            Date extraction rules:
+            - "kemarin" = yesterday from context date
+            - "hari ini" or "tadi" = context date  
+            - "senin", "selasa", etc. = most recent occurrence of that weekday
+            - "15/8" = 15th August current year
+            - "tanggal 20" = 20th of current month
+            - If no date mentioned, return null
             
             Rules:
             - Description and location MUST start with uppercase letter
-            - If date is mentioned in text (like "kemarin", "tadi pagi", specific date), extract it
             - Amount should be numeric only (convert "ribu"->*1000, "k"->*1000)
             - Categories in English: Food, Transport, Utilities, Shopping, Health, Entertainment, Other
             
             Examples:
-            - "beli ayam goreng gofood 4ribu" → {{"description": "Ayam goreng", "amount": 4000, "location": "Gofood", "category": "Food", "date": null}}
-            - "bensin kemarin 50k di shell" → {{"description": "Bensin", "amount": 50000, "location": "Shell", "category": "Transport", "date": "2025-08-05"}}
+            - "kemarin beli ayam 25ribu" → {{"date": "2025-08-05"}} (if context is 2025-08-06)
+            - "senin makan 15k" → {{"date": "2025-08-04"}} (if context is Wed 2025-08-06)
+            - "beli nasi tadi siang 10rb" → {{"date": null}} (same day, let system handle)
             """
             
             response = self.model.generate_content(prompt)
@@ -56,16 +68,17 @@ class AIProcessor:
                 if expense_data.get('location'):
                     expense_data['location'] = expense_data['location'].capitalize()
                 
-                # Handle transaction date logic
+                # Enhanced transaction date logic
                 transaction_date = self._determine_transaction_date(
                     ai_extracted_date=expense_data.get('date'),
                     message_date=message_date,
                     text=text
                 )
+                
                 expense_data['transaction_date'] = transaction_date
                 expense_data['input_by'] = user_name or 'Unknown'
                 
-                print(f"✅ Parsed expense: {expense_data}")
+                print(f"✅ Parsed expense with date logic: {expense_data}")
                 return expense_data
             else:
                 return self._fallback_parse(text, message_date, user_name)
@@ -75,32 +88,153 @@ class AIProcessor:
             return self._fallback_parse(text, message_date, user_name)
     
     def _determine_transaction_date(self, ai_extracted_date, message_date, text):
-        """Determine transaction date based on priority rules"""
-        # 1. If AI extracted a specific date from text, use that
+        """Enhanced transaction date determination with Indonesian language support"""
+        
+        # 1. If AI extracted a specific date, use that
         if ai_extracted_date and ai_extracted_date != "null":
             return ai_extracted_date
         
-        # 2. Check for relative date indicators in text
-        text_lower = text.lower()
-        if message_date:
-            from datetime import timedelta
-            
-            if any(word in text_lower for word in ['kemarin', 'yesterday']):
-                yesterday = message_date - timedelta(days=1)
-                return yesterday.strftime('%Y-%m-%d')
-            elif any(word in text_lower for word in ['lusa', 'besok']):
-                tomorrow = message_date + timedelta(days=1)
-                return tomorrow.strftime('%Y-%m-%d')
+        # 2. Enhanced relative date parsing for Indonesian
+        text_lower = text.lower().strip()
         
-        # 3. Default to message date
-        if message_date:
+        if not message_date:
+            message_date = datetime.now()
+        
+        # Indonesian relative date patterns
+        date_patterns = {
+            # Yesterday variations
+            'yesterday': ['kemarin', 'kmrn', 'yesterday', 'tadi malam'],
+            
+            # Today variations  
+            'today': ['hari ini', 'today', 'tadi', 'barusan', 'sekarang'],
+            
+            # Day before yesterday
+            'day_before_yesterday': ['kemarin dulu', 'lusa kemarin', 'kemarin lusa'],
+            
+            # Tomorrow
+            'tomorrow': ['besok', 'tomorrow'],
+            
+            # Days of week (Indonesian)
+            'monday': ['senin', 'monday'],
+            'tuesday': ['selasa', 'tuesday'], 
+            'wednesday': ['rabu', 'wednesday'],
+            'thursday': ['kamis', 'thursday'],
+            'friday': ['jumat', 'friday'],
+            'saturday': ['sabtu', 'saturday'],
+            'sunday': ['minggu', 'sunday'],
+            
+            # Time-based patterns
+            'morning': ['pagi', 'morning', 'tadi pagi'],
+            'afternoon': ['siang', 'afternoon', 'tadi siang'],
+            'evening': ['sore', 'evening', 'tadi sore'],
+            'night': ['malam', 'night', 'tadi malam']
+        }
+        
+        # Check for explicit relative dates
+        if any(word in text_lower for word in date_patterns['yesterday']):
+            return (message_date - timedelta(days=1)).strftime('%Y-%m-%d')
+        
+        if any(word in text_lower for word in date_patterns['day_before_yesterday']):
+            return (message_date - timedelta(days=2)).strftime('%Y-%m-%d')
+        
+        if any(word in text_lower for word in date_patterns['tomorrow']):
+            return (message_date + timedelta(days=1)).strftime('%Y-%m-%d')
+        
+        # Check for specific days of the week
+        current_weekday = message_date.weekday()  # Monday = 0, Sunday = 6
+        
+        for day, keywords in date_patterns.items():
+            if day in ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday']:
+                if any(keyword in text_lower for keyword in keywords):
+                    target_weekday = {
+                        'monday': 0, 'tuesday': 1, 'wednesday': 2, 'thursday': 3,
+                        'friday': 4, 'saturday': 5, 'sunday': 6
+                    }[day]
+                    
+                    # Calculate days back to reach that weekday
+                    days_back = (current_weekday - target_weekday) % 7
+                    if days_back == 0:  # Same day - assume they mean today
+                        return message_date.strftime('%Y-%m-%d')
+                    else:  # Previous occurrence of that day
+                        target_date = message_date - timedelta(days=days_back)
+                        return target_date.strftime('%Y-%m-%d')
+        
+        # Check for specific date formats in text
+        date_regex_patterns = [
+            # DD/MM or DD-MM (current year assumed)
+            (r'\b(\d{1,2})[/-](\d{1,2})\b', '%d/%m'),
+            
+            # DD/MM/YY or DD/MM/YYYY
+            (r'\b(\d{1,2})[/-](\d{1,2})[/-](\d{2,4})\b', '%d/%m/%Y'),
+            
+            # Indonesian date: "tanggal 15", "tgl 20"
+            (r'(?:tanggal|tgl)\s+(\d{1,2})', 'day_only'),
+            
+            # Numbers with context: "15 kemarin", "20 lalu"
+            (r'(\d{1,2})\s+(?:kemarin|lalu|yang lalu)', 'days_ago'),
+        ]
+        
+        for pattern, format_type in date_regex_patterns:
+            match = re.search(pattern, text_lower)
+            if match:
+                try:
+                    if format_type == 'day_only':
+                        # Extract day, assume current month/year
+                        day = int(match.group(1))
+                        if 1 <= day <= 31:
+                            target_date = message_date.replace(day=day)
+                            # If the day is in the future, assume previous month
+                            if target_date > message_date:
+                                target_date = target_date.replace(month=target_date.month-1)
+                            return target_date.strftime('%Y-%m-%d')
+                    
+                    elif format_type == 'days_ago':
+                        days_ago = int(match.group(1))
+                        if days_ago <= 31:  # Reasonable range
+                            target_date = message_date - timedelta(days=days_ago)
+                            return target_date.strftime('%Y-%m-%d')
+                    
+                    elif format_type == '%d/%m':
+                        day, month = int(match.group(1)), int(match.group(2))
+                        if 1 <= day <= 31 and 1 <= month <= 12:
+                            target_date = message_date.replace(month=month, day=day)
+                            # If future date, assume previous year
+                            if target_date > message_date:
+                                target_date = target_date.replace(year=target_date.year-1)
+                            return target_date.strftime('%Y-%m-%d')
+                    
+                    elif format_type == '%d/%m/%Y':
+                        day, month = int(match.group(1)), int(match.group(2))
+                        year = int(match.group(3))
+                        
+                        # Handle 2-digit years
+                        if year < 100:
+                            year += 2000 if year < 50 else 1900
+                        
+                        if 1 <= day <= 31 and 1 <= month <= 12 and 2020 <= year <= 2030:
+                            return f"{year:04d}-{month:02d}-{day:02d}"
+                            
+                except (ValueError, AttributeError):
+                    continue
+        
+        # 3. Time-context hints (same day but different time reference)
+        time_context_same_day = ['pagi', 'siang', 'sore', 'malam', 'tadi', 'barusan']
+        if any(word in text_lower for word in time_context_same_day):
             return message_date.strftime('%Y-%m-%d')
         
-        # 4. Fallback to current date
-        return datetime.now().strftime('%Y-%m-%d')
+        # 4. Default to message date
+        return message_date.strftime('%Y-%m-%d')
+    
+    def _preprocess_date_context(self, text, message_date):
+        """Add helpful context for AI date understanding"""
+        if not message_date:
+            return text
+        
+        context_info = f"[Context: Today is {message_date.strftime('%A, %B %d, %Y')}] "
+        return context_info + text
     
     def _fallback_parse(self, text, message_date, user_name):
-        """Fallback parsing without AI"""
+        """Enhanced fallback with same date logic"""
         import re
         
         # Extract amount using regex
@@ -124,17 +258,18 @@ class AIProcessor:
                     amount = num
                 break
         
-        # Simple category detection
+        # Category detection
         category = 'Other'
         if any(word in text.lower() for word in ['makan', 'beli', 'food', 'goreng']):
             category = 'Food'
         elif any(word in text.lower() for word in ['bensin', 'grab', 'gojek']):
             category = 'Transport'
         
+        # Use the same enhanced date logic
         transaction_date = self._determine_transaction_date(None, message_date, text)
         
         return {
-            'description': text[:50].capitalize(),  # First 50 chars, capitalized
+            'description': text[:50].capitalize(),
             'amount': amount,
             'location': 'Unknown',
             'category': category,

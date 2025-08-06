@@ -14,47 +14,63 @@ class AIProcessor:
         self.model = genai.GenerativeModel('gemini-1.5-flash')
         print("✅ Gemini AI initialized with gemini-1.5-flash")
     
+    def _get_available_categories(self):
+        """Get current available categories from sheet"""
+        if self.sheets_manager:
+            return self.sheets_manager.get_categories()
+        else:
+            # Fallback if no sheets manager available
+            return ['Food & Dining', 'Transportation', 'Shopping & Retail', 'Utilities & Bills',
+                    'Health & Medical', 'Entertainment & Recreation', 'Education & Learning',
+                    'Personal Care & Beauty', 'Housing & Rent', 'Others']
+
     def parse_expense_text(self, text, message_date=None, user_name=None):
-        """Parse expense text with enhanced date handling and proper capitalization"""
+        """Parse expense text with dynamic categories"""
         if not hasattr(self, 'model'):
             return {'error': 'Gemini API not initialized'}
-        
+
         try:
-            # Pre-process text for better AI understanding
+            # Get current categories from sheet
+            available_categories = self._get_available_categories()
+            categories_str = ", ".join(available_categories)
+            
             processed_text = self._preprocess_date_context(text, message_date)
-            
+
             prompt = f"""
-            Extract expense information from this Indonesian text: "{text}"
-            Context: Message sent on {message_date.strftime('%A, %Y-%m-%d') if message_date else 'unknown date'}
-            
-            Return JSON format:
-            {{
-                "description": "brief description (capitalize first letter)",
-                "amount": numeric_amount,
-                "location": "store/place name (capitalize first letter)", 
-                "category": "Food/Transport/Utilities/Shopping/Health/Entertainment/Other",
-                "date": "YYYY-MM-DD format if specific date mentioned, otherwise null"
-            }}
-            
-            Date extraction rules:
-            - "kemarin" = yesterday from context date
-            - "hari ini" or "tadi" = context date  
-            - "senin", "selasa", etc. = most recent occurrence of that weekday
-            - "15/8" = 15th August current year
-            - "tanggal 20" = 20th of current month
-            - If no date mentioned, return null
-            
-            Rules:
-            - Description and location MUST start with uppercase letter
-            - Amount should be numeric only (convert "ribu"->*1000, "k"->*1000)
-            - Categories in English: Food, Transport, Utilities, Shopping, Health, Entertainment, Other
-            
-            Examples:
-            - "kemarin beli ayam 25ribu" → {{"date": "2025-08-05"}} (if context is 2025-08-06)
-            - "senin makan 15k" → {{"date": "2025-08-04"}} (if context is Wed 2025-08-06)
-            - "beli nasi tadi siang 10rb" → {{"date": null}} (same day, let system handle)
-            """
-            
+Extract expense information from this Indonesian text: "{text}"
+
+Context: Message sent on {message_date.strftime('%A, %Y-%m-%d') if message_date else 'unknown date'}
+
+Return JSON format:
+{{
+    "description": "brief description (capitalize first letter)",
+    "amount": numeric_amount,
+    "location": "store/place name (capitalize first letter)",
+    "category": "one of: {categories_str}",
+    "date": "YYYY-MM-DD format if specific date mentioned, otherwise null"
+}}
+
+IMPORTANT: The category MUST be exactly one of these options: {categories_str}
+
+Date extraction rules:
+- "kemarin" = yesterday from context date
+- "hari ini" or "tadi" = context date
+- "senin", "selasa", etc. = most recent occurrence of that weekday
+- "15/8" = 15th August current year
+- "tanggal 20" = 20th of current month
+- If no date mentioned, return null
+
+Rules:
+- Description and location MUST start with uppercase letter
+- Amount should be numeric only (convert "ribu"->*1000, "k"->*1000)
+- Category must be one of the available categories listed above
+
+Examples:
+- "kemarin beli ayam 25ribu" → {{"category": "Food & Dining"}}
+- "bensin motor 50rb" → {{"category": "Transportation"}}
+- "bayar listrik 200k" → {{"category": "Utilities & Bills"}}
+"""
+
             response = self.model.generate_content(prompt)
             
             # Parse JSON from response
@@ -62,12 +78,18 @@ class AIProcessor:
             if json_match:
                 expense_data = json.loads(json_match.group())
                 
+                # Validate category against available categories
+                if expense_data.get('category') not in available_categories:
+                    expense_data['category'] = self._smart_categorize_fallback(
+                        text, expense_data.get('location', ''), available_categories
+                    )
+                
                 # Ensure proper capitalization
                 if expense_data.get('description'):
                     expense_data['description'] = expense_data['description'].capitalize()
                 if expense_data.get('location'):
                     expense_data['location'] = expense_data['location'].capitalize()
-                
+
                 # Enhanced transaction date logic
                 transaction_date = self._determine_transaction_date(
                     ai_extracted_date=expense_data.get('date'),
@@ -78,14 +100,41 @@ class AIProcessor:
                 expense_data['transaction_date'] = transaction_date
                 expense_data['input_by'] = user_name or 'Unknown'
                 
-                print(f"✅ Parsed expense with date logic: {expense_data}")
+                print(f"✅ Parsed expense with dynamic category: {expense_data}")
                 return expense_data
             else:
                 return self._fallback_parse(text, message_date, user_name)
-                
+
         except Exception as e:
             print(f"❌ Gemini API error: {e}")
             return self._fallback_parse(text, message_date, user_name)
+    
+    def _smart_categorize_fallback(self, text, location, available_categories):
+        """Smart categorization fallback using keyword matching"""
+        text_lower = text.lower()
+        location_lower = location.lower()
+        combined = f"{text_lower} {location_lower}"
+        
+        # Category mapping with keywords
+        category_keywords = {
+            'Food & Dining': ['makan', 'food', 'nasi', 'ayam', 'sate', 'warteg', 'resto', 'cafe', 'kfc', 'mcd'],
+            'Transportation': ['bensin', 'grab', 'gojek', 'ojek', 'bus', 'taxi', 'motor', 'mobil', 'pertamina'],
+            'Shopping & Retail': ['beli', 'belanja', 'shop', 'mall', 'alfamart', 'indomaret', 'toko'],
+            'Utilities & Bills': ['listrik', 'air', 'internet', 'pulsa', 'token', 'pln', 'telkom'],
+            'Health & Medical': ['dokter', 'obat', 'sakit', 'rumah sakit', 'apotek', 'klinik'],
+            'Entertainment & Recreation': ['bioskop', 'film', 'game', 'nonton', 'karaoke', 'gym'],
+            'Education & Learning': ['sekolah', 'kursus', 'les', 'buku', 'kuliah'],
+            'Personal Care & Beauty': ['salon', 'potong rambut', 'spa', 'kosmetik'],
+            'Housing & Rent': ['sewa', 'kost', 'kontrakan', 'rumah', 'apartemen']
+        }
+        
+        for category, keywords in category_keywords.items():
+            if category in available_categories:
+                if any(keyword in combined for keyword in keywords):
+                    return category
+        
+        # Default to last category (usually Others)
+        return available_categories[-1] if available_categories else 'Others'
     
     def _determine_transaction_date(self, ai_extracted_date, message_date, text):
         """Enhanced transaction date determination with Indonesian language support"""

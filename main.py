@@ -18,6 +18,14 @@ logger = logging.getLogger(__name__)
 
 # Initialize processors
 try:
+    logger.info("🔧 Initializing Sheets manager...")
+    sheets_manager = SheetsManager()
+    logger.info("✅ Sheets manager initialized")
+except Exception as e:
+    logger.error(f"❌ Sheets manager failed: {e}")
+    sheets_manager = None
+
+try:
     logger.info("🔧 Initializing AI processor...")
     ai_processor = AIProcessor()
     logger.info("✅ AI processor initialized")
@@ -78,6 +86,7 @@ async def help_command(update: Update, context: CallbackContext):
 **Commands:**
 • /start - Mulai bot
 • /summary - Ringkasan bulanan
+• /categories - Lihat kategori yang tersedia
 • /help - Bantuan ini
 
 **Foto struk:** Kirim foto receipt untuk parsing otomatis dengan AI
@@ -88,6 +97,16 @@ async def summary_command(update: Update, context: CallbackContext):
     if sheets_manager:
         summary = sheets_manager.get_monthly_summary()
         await update.message.reply_text(summary, parse_mode='Markdown')
+    else:
+        await update.message.reply_text("❌ Sheets manager not available")
+
+async def categories_command(update: Update, context: CallbackContext):
+    """Show available categories"""
+    if sheets_manager:
+        categories = sheets_manager.get_categories()
+        category_list = "\n".join([f"• {cat}" for cat in categories])
+        response = f"📋 **Available Categories:**\n{category_list}"
+        await update.message.reply_text(response, parse_mode='Markdown')
     else:
         await update.message.reply_text("❌ Sheets manager not available")
 
@@ -277,6 +296,7 @@ def main():
         application.add_handler(CommandHandler("start", start))
         application.add_handler(CommandHandler("help", help_command))
         application.add_handler(CommandHandler("summary", summary_command))
+        application.add_handler(CommandHandler("categories", categories_command))
         application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
         application.add_handler(MessageHandler(filters.PHOTO, handle_photo))
         

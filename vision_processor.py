@@ -6,6 +6,7 @@ from google.cloud import vision
 from google.oauth2.service_account import Credentials
 import google.generativeai as genai
 from config import GOOGLE_CREDENTIALS_FILE, GEMINI_API_KEY
+from utils import AmountUtils
 
 class VisionProcessor:
     def __init__(self):
@@ -182,17 +183,8 @@ class VisionProcessor:
         return receipt_data
 
     def _clean_amount(self, amount):
-        """Clean and validate amount value"""
-        try:
-            if isinstance(amount, str):
-                clean = re.sub(r'[^\d]', '', amount)
-                return float(clean) if clean else 0
-            elif isinstance(amount, (int, float)):
-                return float(amount)
-            else:
-                return 0
-        except (ValueError, TypeError):
-            return 0
+        """Use AmountUtils for amount cleaning"""
+        return AmountUtils.parse_indonesian_amount(str(amount))
 
     def _parse_indonesian_number(self, number_str):
         """Parse Indonesian number format"""

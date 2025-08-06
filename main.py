@@ -8,6 +8,7 @@ from ai_processor import AIProcessor
 from vision_processor import VisionProcessor
 from sheets_manager import SheetsManager
 from config import TELEGRAM_BOT_TOKEN
+from utils import ResponseFormatter
 
 # Configure logging
 logging.basicConfig(
@@ -27,7 +28,7 @@ except Exception as e:
 
 try:
     logger.info("🔧 Initializing AI processor...")
-    ai_processor = AIProcessor()
+    ai_processor = AIProcessor(sheets_manager=sheets_manager)
     logger.info("✅ AI processor initialized")
 except Exception as e:
     logger.error(f"❌ AI processor failed: {e}")
@@ -45,14 +46,6 @@ try:
 except Exception as e:
     logger.error(f"❌ Vision processor failed: {e}")
     vision_processor = None
-
-try:
-    logger.info("🔧 Initializing Sheets manager...")
-    sheets_manager = SheetsManager()
-    logger.info("✅ Sheets manager initialized")
-except Exception as e:
-    logger.error(f"❌ Sheets manager failed: {e}")
-    sheets_manager = None
 
 # Command handlers
 async def start(update: Update, context: CallbackContext):
@@ -137,21 +130,9 @@ async def handle_text(update: Update, context: CallbackContext):
         success = sheets_manager.add_expense(expense_data) if sheets_manager else False
         
         if success:
-            response = f"""
-✅ **Pengeluaran berhasil dicatat!**
-
-📝 **Detail:**
-• **Tanggal:** {expense_data.get('transaction_date')}
-• **Deskripsi:** {expense_data.get('description', 'N/A')}
-• **Jumlah:** Rp {expense_data.get('amount', 0):,.0f}
-• **Lokasi:** {expense_data.get('location', 'N/A')}
-• **Kategori:** {expense_data.get('category', 'N/A')}
-• **Input oleh:** {expense_data.get('input_by', 'N/A')}
-
-💾 Data tersimpan di Google Sheets
-            """
+            response = ResponseFormatter.format_expense_confirmation(expense_data)
         else:
-            response = "❌ Gagal menyimpan ke Google Sheets"
+            response = ResponseFormatter.format_error_message("Gagal menyimpan ke Google Sheets")
         
         await processing_msg.edit_text(response, parse_mode='Markdown')
         

@@ -1,8 +1,8 @@
 import google.generativeai as genai
 import json
 import re
-from datetime import datetime, timedelta
 from config import GEMINI_API_KEY
+from utils import DateUtils, CategoryUtils
 
 class AIProcessor:
     def __init__(self, sheets_manager=None):
@@ -111,172 +111,15 @@ Examples:
             return self._fallback_parse(text, message_date, user_name)
     
     def _smart_categorize_fallback(self, text, location, available_categories):
-        """Smart categorization fallback using keyword matching"""
-        text_lower = text.lower()
-        location_lower = location.lower()
-        combined = f"{text_lower} {location_lower}"
-        
-        # Category mapping with keywords
-        category_keywords = {
-            'Food & Dining': ['makan', 'food', 'nasi', 'ayam', 'sate', 'warteg', 'resto', 'cafe', 'kfc', 'mcd'],
-            'Transportation': ['bensin', 'grab', 'gojek', 'ojek', 'bus', 'taxi', 'motor', 'mobil', 'pertamina'],
-            'Shopping & Retail': ['beli', 'belanja', 'shop', 'mall', 'alfamart', 'indomaret', 'toko'],
-            'Utilities & Bills': ['listrik', 'air', 'internet', 'pulsa', 'token', 'pln', 'telkom'],
-            'Health & Medical': ['dokter', 'obat', 'sakit', 'rumah sakit', 'apotek', 'klinik'],
-            'Entertainment & Recreation': ['bioskop', 'film', 'game', 'nonton', 'karaoke', 'gym'],
-            'Education & Learning': ['sekolah', 'kursus', 'les', 'buku', 'kuliah'],
-            'Personal Care & Beauty': ['salon', 'potong rambut', 'spa', 'kosmetik'],
-            'Housing & Rent': ['sewa', 'kost', 'kontrakan', 'rumah', 'apartemen']
-        }
-        
-        for category, keywords in category_keywords.items():
-            if category in available_categories:
-                if any(keyword in combined for keyword in keywords):
-                    return category
-        
-        # Default to last category (usually Others)
-        return available_categories[-1] if available_categories else 'Others'
+        """Use CategoryUtils for smart categorization"""
+        return CategoryUtils.match_category_by_keywords(text, location, available_categories)
     
     def _determine_transaction_date(self, ai_extracted_date, message_date, text):
-        """Enhanced transaction date determination with Indonesian language support"""
-        
-        # 1. If AI extracted a specific date, use that
+        """Use DateUtils for enhanced date parsing"""
         if ai_extracted_date and ai_extracted_date != "null":
             return ai_extracted_date
         
-        # 2. Enhanced relative date parsing for Indonesian
-        if message_date and message_date.tzinfo:
-            message_date = message_date.replace(tzinfo=None)
-        elif not message_date:
-            message_date = datetime.now()
-        
-        # 3. Enhanced relative date parsing for Indonesian
-        text_lower = text.lower().strip()
-        
-        # Indonesian relative date patterns
-        date_patterns = {
-            # Yesterday variations
-            'yesterday': ['kemarin', 'kmrn', 'yesterday', 'tadi malam'],
-            
-            # Today variations  
-            'today': ['hari ini', 'today', 'tadi', 'barusan', 'sekarang'],
-            
-            # Day before yesterday
-            'day_before_yesterday': ['kemarin dulu', 'lusa kemarin', 'kemarin lusa'],
-            
-            # Tomorrow
-            'tomorrow': ['besok', 'tomorrow'],
-            
-            # Days of week (Indonesian)
-            'monday': ['senin', 'monday'],
-            'tuesday': ['selasa', 'tuesday'], 
-            'wednesday': ['rabu', 'wednesday'],
-            'thursday': ['kamis', 'thursday'],
-            'friday': ['jumat', 'friday'],
-            'saturday': ['sabtu', 'saturday'],
-            'sunday': ['minggu', 'sunday'],
-            
-            # Time-based patterns
-            'morning': ['pagi', 'morning', 'tadi pagi'],
-            'afternoon': ['siang', 'afternoon', 'tadi siang'],
-            'evening': ['sore', 'evening', 'tadi sore'],
-            'night': ['malam', 'night', 'tadi malam']
-        }
-        
-        # Check for explicit relative dates
-        if any(word in text_lower for word in date_patterns['yesterday']):
-            return (message_date - timedelta(days=1)).strftime('%Y-%m-%d')
-        
-        if any(word in text_lower for word in date_patterns['day_before_yesterday']):
-            return (message_date - timedelta(days=2)).strftime('%Y-%m-%d')
-        
-        if any(word in text_lower for word in date_patterns['tomorrow']):
-            return (message_date + timedelta(days=1)).strftime('%Y-%m-%d')
-        
-        # Check for specific days of the week
-        current_weekday = message_date.weekday()  # Monday = 0, Sunday = 6
-        
-        for day, keywords in date_patterns.items():
-            if day in ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday']:
-                if any(keyword in text_lower for keyword in keywords):
-                    target_weekday = {
-                        'monday': 0, 'tuesday': 1, 'wednesday': 2, 'thursday': 3,
-                        'friday': 4, 'saturday': 5, 'sunday': 6
-                    }[day]
-                    
-                    # Calculate days back to reach that weekday
-                    days_back = (current_weekday - target_weekday) % 7
-                    if days_back == 0:  # Same day - assume they mean today
-                        return message_date.strftime('%Y-%m-%d')
-                    else:  # Previous occurrence of that day
-                        target_date = message_date - timedelta(days=days_back)
-                        return target_date.strftime('%Y-%m-%d')
-        
-        # Check for specific date formats in text
-        date_regex_patterns = [
-            # DD/MM or DD-MM (current year assumed)
-            (r'\b(\d{1,2})[/-](\d{1,2})\b', '%d/%m'),
-            
-            # DD/MM/YY or DD/MM/YYYY
-            (r'\b(\d{1,2})[/-](\d{1,2})[/-](\d{2,4})\b', '%d/%m/%Y'),
-            
-            # Indonesian date: "tanggal 15", "tgl 20"
-            (r'(?:tanggal|tgl)\s+(\d{1,2})', 'day_only'),
-            
-            # Numbers with context: "15 kemarin", "20 lalu"
-            (r'(\d{1,2})\s+(?:kemarin|lalu|yang lalu)', 'days_ago'),
-        ]
-        
-        for pattern, format_type in date_regex_patterns:
-            match = re.search(pattern, text_lower)
-            if match:
-                try:
-                    if format_type == 'day_only':
-                        # Extract day, assume current month/year
-                        day = int(match.group(1))
-                        if 1 <= day <= 31:
-                            target_date = message_date.replace(day=day)
-                            # If the day is in the future, assume previous month
-                            if target_date > message_date:
-                                target_date = target_date.replace(month=target_date.month-1)
-                            return target_date.strftime('%Y-%m-%d')
-                    
-                    elif format_type == 'days_ago':
-                        days_ago = int(match.group(1))
-                        if days_ago <= 31:  # Reasonable range
-                            target_date = message_date - timedelta(days=days_ago)
-                            return target_date.strftime('%Y-%m-%d')
-                    
-                    elif format_type == '%d/%m':
-                        day, month = int(match.group(1)), int(match.group(2))
-                        if 1 <= day <= 31 and 1 <= month <= 12:
-                            target_date = message_date.replace(month=month, day=day)
-                            # If future date, assume previous year
-                            if target_date > message_date:
-                                target_date = target_date.replace(year=target_date.year-1)
-                            return target_date.strftime('%Y-%m-%d')
-                    
-                    elif format_type == '%d/%m/%Y':
-                        day, month = int(match.group(1)), int(match.group(2))
-                        year = int(match.group(3))
-                        
-                        # Handle 2-digit years
-                        if year < 100:
-                            year += 2000 if year < 50 else 1900
-                        
-                        if 1 <= day <= 31 and 1 <= month <= 12 and 2020 <= year <= 2030:
-                            return f"{year:04d}-{month:02d}-{day:02d}"
-                            
-                except (ValueError, AttributeError):
-                    continue
-        
-        # 3. Time-context hints (same day but different time reference)
-        time_context_same_day = ['pagi', 'siang', 'sore', 'malam', 'tadi', 'barusan']
-        if any(word in text_lower for word in time_context_same_day):
-            return message_date.strftime('%Y-%m-%d')
-        
-        # 4. Default to message date
-        return message_date.strftime('%Y-%m-%d')
+        return DateUtils.parse_indonesian_date(text, message_date)
     
     def _preprocess_date_context(self, text, message_date):
         """Add helpful context for AI date understanding"""

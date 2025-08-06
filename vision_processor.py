@@ -18,6 +18,57 @@ class VisionProcessor:
             print(f"❌ Vision API initialization failed: {e}")
             self.client = None
     
+    def test_vision_permissions(self):
+        """Test Vision API permissions with detailed error reporting"""
+        if not self.client:
+            print("❌ Vision API client not initialized")
+            return False
+        
+        try:
+            # Create minimal test image (1x1 pixel white PNG)
+            import base64
+            test_image = base64.b64decode(
+                'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChAGA'
+            )
+            
+            image = vision.Image(content=test_image)
+            response = self.client.text_detection(image=image)
+            
+            # Check for API errors in response
+            if response.error.message:
+                print(f"❌ Vision API error: {response.error.message}")
+                return False
+            
+            print("✅ Vision API permissions test successful")
+            print(f"📊 Test completed - API accessible")
+            return True
+            
+        except Exception as e:
+            error_msg = str(e)
+            print(f"❌ Vision API test failed: {error_msg}")
+            
+            # Provide specific guidance based on error type
+            if "403" in error_msg or "permission" in error_msg.lower():
+                print("💡 SOLUTION: Enable Cloud Vision API in Google Cloud Console")
+                print("   1. Go to console.cloud.google.com")
+                print("   2. APIs & Services → Library")
+                print("   3. Search 'Cloud Vision API' → Enable")
+            
+            elif "401" in error_msg or "authentication" in error_msg.lower():
+                print("💡 SOLUTION: Check credentials.json file")
+                print("   1. Verify file exists and is valid")
+                print("   2. Check service account has proper roles")
+            
+            elif "quota" in error_msg.lower():
+                print("💡 SOLUTION: Check API quotas")
+                print("   1. May have exceeded free tier (1000 requests/month)")
+                print("   2. Check billing account if needed")
+            
+            else:
+                print("💡 SOLUTION: Check general Vision API setup")
+            
+            return False
+
     def extract_receipt_data(self, image_path, message_date, user_name):
         """Extract structured data from receipt image"""
         if not self.client:
@@ -61,7 +112,7 @@ class VisionProcessor:
             'amount': 0,
             'location': 'Unknown',
             'category': 'Other',
-            'transaction_date': message_date.strftime('%Y-%m-%d'),
+            'transaction_date': self._normalize_datetime(message_date).strftime('%Y-%m-%d'),
             'input_by': user_name,
             'source': 'Vision API'
         }
@@ -129,6 +180,17 @@ class VisionProcessor:
         
         return receipt_data
     
+    def _normalize_datetime(self, dt):
+        """Convert any datetime to timezone-naive for consistent operations"""
+        if dt is None:
+            return datetime.now()
+        
+        # If timezone-aware, convert to naive
+        if hasattr(dt, 'tzinfo') and dt.tzinfo is not None:
+            return dt.replace(tzinfo=None)
+        
+        return dt
+    
     def _extract_receipt_date(self, text, fallback_date):
         """Extract date from receipt text with timezone handling"""
         date_patterns = [
@@ -148,7 +210,7 @@ class VisionProcessor:
                         
                         # CRITICAL FIX: Handle timezone comparison
                         # Convert both dates to naive for comparison
-                        fallback_naive = fallback_date.replace(tzinfo=None) if fallback_date.tzinfo else fallback_date
+                        fallback_naive = self._normalize_datetime(fallback_date)
                         
                         # Validate date is reasonable (not future, not too old)
                         if (fallback_naive - timedelta(days=30)) <= parsed_date <= fallback_naive:
@@ -157,7 +219,7 @@ class VisionProcessor:
                         continue
         
         # Return fallback date (handle timezone)
-        fallback_naive = fallback_date.replace(tzinfo=None) if fallback_date.tzinfo else fallback_date
+        fallback_naive = self._normalize_datetime(fallback_date)
         return fallback_naive.strftime('%Y-%m-%d')
     
     def _categorize_receipt(self, location, full_text):
@@ -198,3 +260,23 @@ class VisionProcessor:
             return 'Utilities'
         
         return 'Other'
+
+    def extract_text_only(self, image_path):
+        """Fallback method - just extract text like old OCR"""
+        if not self.client:
+            return "Vision API not available"
+        
+        try:
+            with open(image_path, 'rb') as image_file:
+                content = image_file.read()
+            
+            image = vision.Image(content=content)
+            response = self.client.text_detection(image=image)
+            
+            if response.text_annotations:
+                return response.text_annotations[0].description
+            return "No text found"
+            
+        except Exception as e:
+            print(f"❌ Text extraction error: {e}")
+            return f"Error: {str(e)}"

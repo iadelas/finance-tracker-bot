@@ -19,55 +19,52 @@ class VisionProcessor:
             self.client = None
     
     def test_vision_permissions(self):
-        """Test Vision API permissions with detailed error reporting"""
+        """Test Vision API permissions with a valid minimal image"""
         if not self.client:
             print("❌ Vision API client not initialized")
             return False
         
         try:
-            # Create minimal test image (1x1 pixel white PNG)
+            # Create a valid 1x1 pixel white PNG (corrected base64)
             import base64
-            test_image = base64.b64decode(
-                'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChAGA'
-            )
+            # This is a properly encoded 1x1 white PNG
+            test_image_b64 = """
+            iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8/5+hHgAHggJ/PchI7wAAAABJRU5ErkJggg==
+            """.strip().replace('\n', '').replace(' ', '')
             
+            test_image = base64.b64decode(test_image_b64)
+            
+            # Create Vision API image object
             image = vision.Image(content=test_image)
+            
+            # Use text_detection (simplest API call)
             response = self.client.text_detection(image=image)
             
             # Check for API errors in response
-            if response.error.message:
+            if response.error and response.error.message:
                 print(f"❌ Vision API error: {response.error.message}")
                 return False
             
             print("✅ Vision API permissions test successful")
-            print(f"📊 Test completed - API accessible")
             return True
             
         except Exception as e:
             error_msg = str(e)
             print(f"❌ Vision API test failed: {error_msg}")
             
-            # Provide specific guidance based on error type
-            if "403" in error_msg or "permission" in error_msg.lower():
+            # Provide specific solutions
+            if "invalid argument" in error_msg.lower():
+                print("💡 SOLUTION: Image data format issue")
+                print("   Try using a different test image format")
+            elif "403" in error_msg or "permission" in error_msg.lower():
                 print("💡 SOLUTION: Enable Cloud Vision API in Google Cloud Console")
-                print("   1. Go to console.cloud.google.com")
-                print("   2. APIs & Services → Library")
-                print("   3. Search 'Cloud Vision API' → Enable")
-            
-            elif "401" in error_msg or "authentication" in error_msg.lower():
-                print("💡 SOLUTION: Check credentials.json file")
-                print("   1. Verify file exists and is valid")
-                print("   2. Check service account has proper roles")
-            
             elif "quota" in error_msg.lower():
-                print("💡 SOLUTION: Check API quotas")
-                print("   1. May have exceeded free tier (1000 requests/month)")
-                print("   2. Check billing account if needed")
-            
+                print("💡 SOLUTION: Check API quotas - may have exceeded free tier")
             else:
-                print("💡 SOLUTION: Check general Vision API setup")
+                print("💡 SOLUTION: Check Vision API setup and credentials")
             
             return False
+
 
     def extract_receipt_data(self, image_path, message_date, user_name):
         """Extract structured data from receipt image"""

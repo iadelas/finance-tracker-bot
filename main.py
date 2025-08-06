@@ -1,28 +1,12 @@
 import logging
 import os
-from threading import Thread
-from http.server import HTTPServer, BaseHTTPRequestHandler
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, CallbackContext
+from telegram.request import HTTPXRequest
 from ai_processor import AIProcessor
 from ocr_processor import OCRProcessor
 from sheets_manager import SheetsManager
 from config import TELEGRAM_BOT_TOKEN
-
-# Simple health check handler
-class HealthHandler(BaseHTTPRequestHandler):
-    def do_GET(self):
-        if self.path == '/health':
-            self.send_response(200)
-            self.send_header('Content-type', 'text/plain')
-            self.end_headers()
-            self.wfile.write(b'Bot is running')
-        else:
-            self.send_response(404)
-            self.end_headers()
-    
-    def log_message(self, format, *args):
-        pass  # Suppress HTTP server logs
 
 # Enable logging
 logging.basicConfig(
@@ -36,9 +20,8 @@ ai_processor = AIProcessor()
 ocr_processor = OCRProcessor()
 sheets_manager = SheetsManager()
 
-# Your existing handler functions (start, help_command, etc.)
+# Your existing handlers remain the same
 async def start(update: Update, context: CallbackContext):
-    """Start command handler"""
     welcome_message = """
 🤖 **Selamat datang di Finance Tracker Bot!**
 
@@ -68,7 +51,7 @@ async def help_command(update: Update, context: CallbackContext):
 
 **Contoh valid:**
 • ✅ "beli sayur 15ribu di pasar"
-• ✅ "bensin 20k shell"  
+• ✅ "bensin 20k shell"
 • ✅ "lunch 35000 mall"
 
 **Commands:**
@@ -161,25 +144,25 @@ async def handle_photo(update: Update, context: CallbackContext):
         logger.error(f"Error processing photo: {e}")
         await processing_msg.edit_text("❌ Gagal memproses foto struk")
 
-def start_health_server():
-    """Start HTTP server for Render health checks"""
-    port = int(os.environ.get('PORT', 10000))
-    server = HTTPServer(('0.0.0.0', port), HealthHandler)
-    logger.info(f"🌐 Health check server starting on port {port}")
-    server.serve_forever()
-
 def main():
-    """Main function with health check server"""
+    """Main function with webhook support for production"""
     if not TELEGRAM_BOT_TOKEN:
-        logger.error("TELEGRAM_BOT_TOKEN not found!")
+        logger.error("❌ TELEGRAM_BOT_TOKEN not found!")
         return
     
-    # Start health check server in background thread
-    health_thread = Thread(target=start_health_server, daemon=True)
-    health_thread.start()
+    # Get deployment environment info
+    port = int(os.environ.get('PORT', 8000))
+    webhook_url = os.environ.get('RENDER_EXTERNAL_URL')
     
-    # Create Telegram application
-    application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
+    # Create application with optimized request handler
+    request = HTTPXRequest(
+        connection_pool_size=20,
+        read_timeout=30,
+        write_timeout=30,
+        connect_timeout=30
+    )
+    
+    application = Application.builder().token(TELEGRAM_BOT_TOKEN).request(request).build()
     
     # Add handlers
     application.add_handler(CommandHandler("start", start))
@@ -188,14 +171,28 @@ def main():
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
     application.add_handler(MessageHandler(filters.PHOTO, handle_photo))
     
-    logger.info("🚀 Starting Finance Tracker Bot...")
-    print("🤖 Bot starting - with health check endpoint")
-    
-    # Run bot polling
-    application.run_polling(
-        allowed_updates=Update.ALL_TYPES,
-        drop_pending_updates=True
-    )
+    # Production vs Development mode
+    if webhook_url:
+        # Production mode (Render) - use webhooks
+        logger.info("🌐 Production mode - Running with webhooks")
+        logger.info(f"🔗 Webhook URL: {webhook_url}/webhook")
+        logger.info(f"🚀 Server starting on port {port}")
+        
+        application.run_webhook(
+            listen="0.0.0.0",
+            port=port,
+            webhook_url=f"{webhook_url}/webhook",
+            url_path="/webhook",
+            # Health check endpoint
+            drop_pending_updates=True
+        )
+    else:
+        # Development mode - use polling
+        logger.info("💻 Development mode - Running with polling")
+        application.run_polling(
+            allowed_updates=Update.ALL_TYPES,
+            drop_pending_updates=True
+        )
 
 if __name__ == '__main__':
     main()

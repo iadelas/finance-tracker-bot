@@ -85,25 +85,52 @@ async def summary_command(update: Update, context: CallbackContext):
         await update.message.reply_text("❌ Sheets manager not available")
 
 async def handle_text(update: Update, context: CallbackContext):
-    if not ai_processor or not sheets_manager:
-        await update.message.reply_text("❌ Services not available")
-        return
-    
     user_text = update.message.text
     processing_msg = await update.message.reply_text("🔄 Memproses pengeluaran...")
     
     try:
-        expense_data = ai_processor.parse_expense_text(user_text)
-        success = sheets_manager.add_expense(expense_data)
+        # Try AI processing first
+        if ai_processor:
+            expense_data = ai_processor.parse_expense_text(user_text)
+        else:
+            expense_data = {'error': 'AI processor not available'}
+        
+        # If AI fails, use fallback parsing
+        if expense_data.get('error'):
+            expense_data = parse_expense_fallback(user_text)
+            expense_data['source'] = 'Fallback Parser'
+        else:
+            expense_data['source'] = 'Gemini AI'
+        
+        # Try to save to sheets
+        if sheets_manager:
+            success = sheets_manager.add_expense(expense_data)
+        else:
+            success = False
         
         if success:
             response = f"""
 ✅ **Pengeluaran berhasil dicatat!**
+
+📝 **Detail:**
 • **Deskripsi:** {expense_data.get('description', 'N/A')}
 • **Jumlah:** Rp {expense_data.get('amount', 0):,.0f}
+• **Lokasi:** {expense_data.get('location', 'N/A')}
+• **Kategori:** {expense_data.get('category', 'N/A')}
+• **Parser:** {expense_data.get('source', 'Unknown')}
+
+💾 Data tersimpan di Google Sheets
             """
         else:
-            response = "❌ Gagal menyimpan ke Google Sheets"
+            response = f"""
+⚠️ **Data diproses tapi gagal menyimpan**
+
+📝 **Detail yang diparsing:**
+• **Deskripsi:** {expense_data.get('description', 'N/A')}
+• **Jumlah:** Rp {expense_data.get('amount', 0):,.0f}
+
+❌ Masalah koneksi Google Sheets
+            """
         
         await processing_msg.edit_text(response, parse_mode='Markdown')
         
@@ -111,8 +138,45 @@ async def handle_text(update: Update, context: CallbackContext):
         logger.error(f"Error processing text: {e}")
         await processing_msg.edit_text("❌ Terjadi kesalahan saat memproses")
 
-async def handle_photo(update: Update, context: CallbackContext):
-    await update.message.reply_text("📷 Photo processing temporarily disabled")
+def parse_expense_fallback(text):
+    """Simple regex-based expense parser as fallback"""
+    import re
+    
+    # Extract amount
+    amount = 0
+    amount_patterns = [
+        r'(\d+)(?:ribu|rb)',
+        r'(\d+)k', 
+        r'(\d+)(?:000)',
+        r'(\d+)'
+    ]
+    
+    for pattern in amount_patterns:
+        match = re.search(pattern, text.lower())
+        if match:
+            num = int(match.group(1))
+            if 'ribu' in text.lower() or 'rb' in text.lower():
+                amount = num * 1000
+            elif 'k' in text.lower():
+                amount = num * 1000
+            else:
+                amount = num
+            break
+    
+    # Simple category detection
+    category = 'other'
+    if any(word in text.lower() for word in ['makan', 'beli', 'food', 'goreng']):
+        category = 'food'
+    elif any(word in text.lower() for word in ['bensin', 'grab', 'gojek']):
+        category = 'transport'
+    
+    return {
+        'description': text[:50],
+        'amount': amount,
+        'location': 'Unknown',
+        'category': category
+    }
+
 
 def main():
     """Main function with comprehensive error handling"""

@@ -9,7 +9,11 @@ from config import GOOGLE_CREDENTIALS_FILE, GEMINI_API_KEY
 from utils import AmountUtils
 
 class VisionProcessor:
-    def __init__(self):
+    def __init__(self,  sheets_manager=None):
+
+        # Store sheets_manager reference
+        self.sheets_manager = sheets_manager
+
         """Initialize Google Vision API and Gemini AI clients"""
         # Initialize Vision API
         try:
@@ -70,66 +74,82 @@ class VisionProcessor:
     def _parse_with_gemini(self, ocr_text, message_date, user_name):
         """Use Gemini AI to intelligently parse receipt OCR text"""
         try:
+            # ✅ GET DYNAMIC CATEGORIES
+            available_categories = self._get_available_categories()
+            categories_str = "|".join(available_categories)
+            
             prompt = f"""
-            Analyze this Indonesian receipt OCR text and extract the correct information:
+    Analyze this Indonesian receipt OCR text and extract the correct information:
 
-            OCR TEXT:
-            {ocr_text}
+    OCR TEXT:
+    {ocr_text}
 
-            PARSING RULES:
-            1. MERCHANT: Find the business/store name (usually at the top, ignore address/phone)
-            2. TOTAL AMOUNT: Find the final amount paid (look for "TOTAL", "JUMLAH", "GRAND TOTAL", or largest amount at bottom)
-            3. DATE: Extract transaction date (DD/MM/YYYY, DD-MM-YYYY, or "DD Month YYYY" format)
-            4. IGNORE: Phone numbers, reference codes, item codes, tax IDs
-            5. CATEGORY: Classify based on merchant type
+    PARSING RULES:
+    1. MERCHANT: Find the business/store name (usually at the top, ignore address/phone)
+    2. TOTAL AMOUNT: Find the final amount paid (look for "TOTAL", "JUMLAH", "GRAND TOTAL", or largest amount at bottom)
+    3. DATE: Extract transaction date (DD/MM/YYYY, DD-MM-YYYY, or "DD Month YYYY" format)
+    4. IGNORE: Phone numbers, reference codes, item codes, tax IDs
+    5. CATEGORY: Classify based on merchant type
 
-            Return ONLY valid JSON:
-            {{
-                "merchant": "Business Name",
-                "amount": numeric_amount_only,
-                "date": "YYYY-MM-DD",
-                "category": "Food|Shopping|Transport|Health|Entertainment|Utilities|Other"
-            }}
+    Return ONLY valid JSON:
+    {{
+    "merchant": "Business Name",
+    "amount": numeric_amount_only,
+    "date": "YYYY-MM-DD",
+    "category": "one of: {categories_str}"
+    }}
 
-            EXAMPLES:
-            - "TOTAL: 25,200" → amount: 25200
-            - "ALFAMART CILANDAK" → merchant: "Alfamart Cilandak"
-            - "18-03-2022" → date: "2022-03-18"
-            - "BreadTalk" → category: "Food"
-            
-            Focus on accuracy. If unsure about any field, use reasonable defaults.
-            """
-            
+    IMPORTANT: The category MUST be exactly one of these options: {categories_str}
+
+    EXAMPLES:
+    - "TOTAL: 25,200" → amount: 25200
+    - "ALFAMART CILANDAK" → merchant: "Alfamart Cilandak"
+    - "18-03-2022" → date: "2022-03-18"
+    - "BreadTalk" → category: "Food & Dining"
+
+    Focus on accuracy. If unsure about any field, use reasonable defaults.
+    """
+
             response = self.gemini_model.generate_content(prompt)
             
             # Extract JSON from response
             json_match = re.search(r'\{[^}]*\}', response.text, re.DOTALL)
             if not json_match:
                 return {'error': 'No valid JSON in AI response'}
-            
+
             ai_result = json.loads(json_match.group())
             
+            # ✅ VALIDATE CATEGORY against available categories
+            category = ai_result.get('category', 'Others')
+            if category not in available_categories:
+                # Use CategoryUtils for fallback categorization
+                from utils import CategoryUtils
+                category = CategoryUtils.match_category_by_keywords(
+                    ocr_text, ai_result.get('merchant', ''), available_categories
+                )
+
             # Build structured response
             receipt_data = {
                 'description': f"Purchase at {ai_result.get('merchant', 'Unknown')}",
                 'amount': self._clean_amount(ai_result.get('amount', 0)),
                 'location': ai_result.get('merchant', 'Unknown'),
-                'category': ai_result.get('category', 'Other'),
+                'category': category,  # ✅ USE VALIDATED CATEGORY
                 'transaction_date': ai_result.get('date') or self._normalize_datetime(message_date).strftime('%Y-%m-%d'),
                 'input_by': user_name,
                 'source': 'Vision API + Gemini AI'
             }
-            
+
             # Ensure proper formatting
             receipt_data['description'] = receipt_data['description'].capitalize()
             receipt_data['location'] = receipt_data['location'].title()
             
             return receipt_data
-            
+
         except json.JSONDecodeError as e:
             return {'error': 'Invalid AI response format'}
         except Exception as e:
             return {'error': f'AI parsing failed: {str(e)}'}
+
 
     def _parse_with_regex(self, raw_text, message_date, user_name):
         """Fallback regex-based parsing"""
@@ -195,42 +215,94 @@ class VisionProcessor:
             return None
 
     def _categorize_merchant(self, merchant_name):
-        """Categorize based on merchant name"""
-        merchant_lower = merchant_name.lower()
-        
-        # Food & Restaurant
-        if any(word in merchant_lower for word in [
-            'restaurant', 'resto', 'cafe', 'food', 'makan', 'warung',
-            'kfc', 'mcd', 'pizza', 'bakery', 'bread', 'cake'
-        ]):
-            return 'Food'
-        
-        # Shopping & Retail
-        elif any(word in merchant_lower for word in [
-            'mart', 'market', 'grocery', 'supermarket', 'indomaret', 
-            'alfamart', 'shop', 'store', 'mall', 'plaza'
-        ]):
-            return 'Shopping'
-        
-        # Transport & Fuel
-        elif any(word in merchant_lower for word in [
-            'shell', 'pertamina', 'spbu', 'gas', 'petrol'
-        ]):
-            return 'Transport'
-        
-        # Health & Pharmacy
-        elif any(word in merchant_lower for word in [
-            'apotek', 'pharmacy', 'clinic', 'hospital', 'dokter'
-        ]):
-            return 'Health'
-        
-        # Utilities
-        elif any(word in merchant_lower for word in [
-            'pln', 'listrik', 'telkom', 'internet', 'water'
-        ]):
-            return 'Utilities'
-        
-        return 'Other'
+        """Categorize based on merchant name using dynamic categories"""
+        if self.sheets_manager:
+            # Use dynamic categories from Google Sheet
+            available_categories = self._get_available_categories()
+            from utils import CategoryUtils
+            return CategoryUtils.match_category_by_keywords(
+                merchant_name, merchant_name, available_categories
+            )
+        else:
+            # Fallback to hardcoded logic if no sheets manager
+            merchant_lower = merchant_name.lower()
+            
+            # Food & Dining
+            if any(word in merchant_lower for word in [
+                'restaurant', 'resto', 'cafe', 'food', 'makan', 'warung',
+                'kfc', 'mcd', 'pizza', 'bakery', 'bread', 'cake', 'starbucks',
+                'dunkin', 'breadtalk', 'hokben', 'ayam', 'sate', 'nasi', 'warteg',
+                'padang', 'sop', 'bakso', 'mie', 'gado', 'rendang', 'soto'
+            ]):
+                return 'Food & Dining'
+            
+            # Shopping & Retail  
+            elif any(word in merchant_lower for word in [
+                'mart', 'market', 'grocery', 'supermarket', 'indomaret',
+                'alfamart', 'shop', 'store', 'mall', 'plaza', 'hypermart',
+                'carrefour', 'giant', 'lottemart', 'ranch', 'hero', 'ace',
+                'electronic', 'gramedia', 'periplus', 'uniqlo', 'zara', 'h&m'
+            ]):
+                return 'Shopping & Retail'
+            
+            # Transportation
+            elif any(word in merchant_lower for word in [
+                'shell', 'pertamina', 'spbu', 'gas', 'petrol', 'bensin',
+                'grab', 'gojek', 'blue bird', 'silver bird', 'taxi',
+                'parkir', 'parking', 'tol', 'toll', 'busway', 'transjakarta'
+            ]):
+                return 'Transportation'
+            
+            # Health & Medical
+            elif any(word in merchant_lower for word in [
+                'apotek', 'pharmacy', 'clinic', 'hospital', 'dokter', 'rs ',
+                'rumah sakit', 'kimia farma', 'guardian', 'century',
+                'klinik', 'medical', 'kesehatan', 'lab', 'laboratorium'
+            ]):
+                return 'Health & Medical'
+            
+            # Personal Care & Beauty
+            elif any(word in merchant_lower for word in [
+                'salon', 'barbershop', 'spa', 'massage', 'pijet', 'reflexi',
+                'nail', 'facial', 'watsons', 'guardian', 'kosmetik', 'parfum',
+                'kecantikan', 'perawatan', 'potong rambut', 'hair'
+            ]):
+                return 'Personal Care & Beauty'
+            
+            # Utilities & Bills
+            elif any(word in merchant_lower for word in [
+                'pln', 'listrik', 'telkom', 'internet', 'water', 'air',
+                'indihome', 'xl', 'telkomsel', 'indosat', 'tri', 'smartfren',
+                'pulsa', 'token', 'pdam', 'wifi', 'bayar', 'tagihan'
+            ]):
+                return 'Utilities & Bills'
+            
+            # Entertainment & Recreation
+            elif any(word in merchant_lower for word in [
+                'cinema', 'bioskop', 'xxi', 'cgv', 'karaoke', 'gym', 'fitness',
+                'netflix', 'spotify', 'game', 'playstation', 'billiard',
+                'bowling', 'timezone', 'amazone', 'waterboom', 'ancol'
+            ]):
+                return 'Entertainment & Recreation'
+            
+            # Education & Learning
+            elif any(word in merchant_lower for word in [
+                'sekolah', 'university', 'universitas', 'kampus', 'course',
+                'kursus', 'les', 'bimbel', 'training', 'seminar', 'workshop',
+                'gramedia', 'toko buku', 'bookstore', 'perpustakaan'
+            ]):
+                return 'Education & Learning'
+            
+            # Housing & Rent
+            elif any(word in merchant_lower for word in [
+                'kost', 'rental', 'sewa', 'apartment', 'apartemen', 'hotel',
+                'penginapan', 'villa', 'airbnb', 'oyo', 'reddoorz', 'airy'
+            ]):
+                return 'Housing & Rent'
+            
+            # Default fallback
+            else:
+                return 'Others'
 
     def _normalize_datetime(self, dt):
         """Convert datetime to timezone-naive for consistent operations"""
@@ -241,3 +313,13 @@ class VisionProcessor:
             return dt.replace(tzinfo=None)
         
         return dt
+    
+    def _get_available_categories(self):
+        """Get current available categories from sheet"""
+        if self.sheets_manager:
+            return self.sheets_manager.get_categories()
+        else:
+            # Fallback categories if no sheets manager available
+            return ['Food & Dining', 'Transportation', 'Shopping & Retail', 'Utilities & Bills',
+                    'Health & Medical', 'Entertainment & Recreation', 'Education & Learning',
+                    'Personal Care & Beauty', 'Housing & Rent', 'Others']

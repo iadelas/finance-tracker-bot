@@ -37,7 +37,8 @@ except Exception as e:
 try:
     logger.info("🔧 Initializing Vision processor...")
     vision_processor = VisionProcessor()
-
+    vision_processor = VisionProcessor(sheets_manager=sheets_manager)
+    
     if hasattr(vision_processor, 'vision_client') and vision_processor.vision_client:
         logger.info("✅ Vision processor initialized")
     else:

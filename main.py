@@ -84,6 +84,88 @@ async def summary_command(update: Update, context: CallbackContext):
     else:
         await update.message.reply_text("❌ Sheets manager not available")
 
+async def handle_photo(update: Update, context: CallbackContext):
+    """Handle photo/receipt processing with OCR"""
+    processing_msg = await update.message.reply_text("📷 Memproses foto struk...")
+    
+    try:
+        # Get the largest photo size
+        photo_file = await update.message.photo[-1].get_file()
+        photo_path = "temp_receipt.jpg"
+        
+        # Download photo locally
+        await photo_file.download_to_drive(photo_path)
+        logger.info(f"📸 Photo downloaded: {photo_path}")
+        
+        # Extract text using OCR
+        if ocr_processor:
+            ocr_text = ocr_processor.extract_text_from_image(photo_path)
+            logger.info(f"🔍 OCR extracted text: {ocr_text[:100]}...")
+        else:
+            await processing_msg.edit_text("❌ OCR processor not available")
+            return
+        
+        # Parse expense data using AI
+        if ai_processor:
+            expense_data = ai_processor.parse_expense_text(ocr_text)
+            expense_data['source'] = 'Photo Receipt'
+        else:
+            # Fallback parsing without AI
+            expense_data = parse_expense_fallback(ocr_text)
+            expense_data['source'] = 'Photo Receipt (Fallback)'
+        
+        # Clean up temp file
+        if os.path.exists(photo_path):
+            os.remove(photo_path)
+            logger.info("🧹 Temp photo file cleaned up")
+        
+        # Handle parsing errors
+        if expense_data.get('error'):
+            await processing_msg.edit_text(f"❌ Tidak dapat membaca struk: {expense_data['error']}")
+            return
+        
+        # Save to Google Sheets
+        if sheets_manager:
+            success = sheets_manager.add_expense(expense_data)
+        else:
+            success = False
+        
+        # Send response
+        if success:
+            response = f"""
+✅ **Struk berhasil diproses!**
+
+📝 **Detail dari foto:**
+• **Deskripsi:** {expense_data.get('description', 'N/A')}
+• **Jumlah:** Rp {expense_data.get('amount', 0):,.0f}
+• **Lokasi:** {expense_data.get('location', 'N/A')}
+• **Kategori:** {expense_data.get('category', 'N/A')}
+
+📸 Sumber: {expense_data.get('source', 'Photo')}
+💾 Data tersimpan di Google Sheets
+            """
+        else:
+            response = f"""
+⚠️ **Foto diproses tapi gagal menyimpan**
+
+📝 **Detail yang diparsing:**
+• **Deskripsi:** {expense_data.get('description', 'N/A')}
+• **Jumlah:** Rp {expense_data.get('amount', 0):,.0f}
+
+❌ Masalah koneksi Google Sheets
+            """
+        
+        await processing_msg.edit_text(response, parse_mode='Markdown')
+        
+    except Exception as e:
+        logger.error(f"❌ Error processing photo: {e}")
+        
+        # Clean up temp file if it exists
+        if os.path.exists("temp_receipt.jpg"):
+            os.remove("temp_receipt.jpg")
+        
+        await processing_msg.edit_text("❌ Gagal memproses foto struk")
+
 async def handle_text(update: Update, context: CallbackContext):
     user_text = update.message.text
     processing_msg = await update.message.reply_text("🔄 Memproses pengeluaran...")

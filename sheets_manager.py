@@ -55,7 +55,7 @@ class SheetsManager:
             return False
     
     def add_expense(self, expense_data):
-        """Add expense with detailed error logging"""
+        """Add expense with correct sheet name"""
         if not self.service:
             print("❌ Google Sheets service not available")
             return False
@@ -72,43 +72,37 @@ class SheetsManager:
             
             request_body = {'values': [row_data]}
             
-            print(f"🔄 Attempting to write to sheet: {self.sheet_id}")
-            print(f"📊 Data to write: {row_data}")
+            print(f"🔄 Writing to sheet 'Catatan': {row_data}")
             
-            # Make the request with timeout handling
             result = self.service.spreadsheets().values().append(
                 spreadsheetId=self.sheet_id,
-                range='Sheet1!A:F',
+                range='Catatan!A:F',  # Changed from 'Sheet1!A:F' to 'Catatan!A:F'
                 valueInputOption='RAW',
                 insertDataOption='INSERT_ROWS',
                 body=request_body
             ).execute()
             
-            print(f"✅ Google Sheets response: {result}")
+            print(f"✅ Added expense to Catatan: {expense_data.get('description')}")
             return True
             
         except Exception as e:
-            print(f"❌ Google Sheets error details: {e}")
-            print(f"❌ Error type: {type(e).__name__}")
-            # Print more detailed error info
-            import traceback
-            traceback.print_exc()
+            print(f"❌ Error adding to sheet: {e}")
             return False
-    
+
     def get_monthly_summary(self):
-        """Get current month expense summary"""
+        """Get current month expense summary from Catatan sheet"""
         if not self.service:
             return "Google Sheets not available"
         
         try:
-            # Get all data from Sheet1
+            # Get all data from Catatan sheet
             result = self.service.spreadsheets().values().get(
                 spreadsheetId=self.sheet_id,
-                range='Sheet1!A:F'
+                range='Catatan!A:F'  # Changed from 'Sheet1!A:F'
             ).execute()
             
             rows = result.get('values', [])
-            if len(rows) <= 1:  # Only headers or empty
+            if len(rows) <= 1:
                 return "📊 **Ringkasan Bulan Ini:**\nBelum ada data pengeluaran"
             
             # Calculate current month total

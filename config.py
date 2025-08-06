@@ -1,20 +1,35 @@
 import os
 from dotenv import load_dotenv
 
+# Load environment variables
 load_dotenv()
 
-# Telegram Bot Configuration
+# Required environment variables
 TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
-
-# API Keys
 GEMINI_API_KEY = os.getenv('GEMINI_API_KEY')
-
-# Google Services Configuration
 GOOGLE_SHEET_ID = os.getenv('GOOGLE_SHEET_ID')
-GOOGLE_CREDENTIALS_FILE = os.getenv('GOOGLE_CREDENTIALS_FILE', 'credentials.json')
+GOOGLE_CREDENTIALS_FILE = os.getenv('GOOGLE_CREDENTIALS_FILE')
 
-# Validate critical variables
-if not TELEGRAM_BOT_TOKEN:
-    print("WARNING: TELEGRAM_BOT_TOKEN not found in environment variables")
-if not GEMINI_API_KEY:
-    print("WARNING: GEMINI_API_KEY not found in environment variables")
+def validate_environment():
+    """Validate that all required environment variables are set"""
+    required_vars = {
+        'TELEGRAM_BOT_TOKEN': TELEGRAM_BOT_TOKEN,
+        'GEMINI_API_KEY': GEMINI_API_KEY,
+        'GOOGLE_SHEET_ID': GOOGLE_SHEET_ID,
+        'GOOGLE_CREDENTIALS_FILE': GOOGLE_CREDENTIALS_FILE,
+    }
+    
+    missing_vars = [var for var, value in required_vars.items() if not value]
+    
+    if missing_vars:
+        print("❌ Missing required environment variables:")
+        for var in missing_vars:
+            print(f"   - {var}")
+        print("\n💡 Please copy .env.example to .env and fill in your values")
+        raise ValueError(f"Missing environment variables: {missing_vars}")
+    
+    print("✅ All environment variables loaded successfully")
+
+# Validate on import
+if __name__ != "__main__":
+    validate_environment()

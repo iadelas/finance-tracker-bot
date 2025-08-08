@@ -16,17 +16,6 @@ class TimeBasedKeepAliveWithPrewarming:
         self.end_time = time_obj(23, 59)   # 23:59
         self.session = None
         
-    async def __aenter__(self):
-        self.session = aiohttp.ClientSession(
-            timeout=aiohttp.ClientTimeout(total=30),
-            connector=aiohttp.TCPConnector(limit=10)
-        )
-        return self
-    
-    async def __aexit__(self, exc_type, exc_val, exc_tb):
-        if self.session:
-            await self.session.close()
-        
     def is_active_hours(self):
         """Check if current time is within active hours (06:00-24:00)"""
         now = datetime.now(self.timezone).time()
@@ -107,19 +96,22 @@ class TimeBasedKeepAliveWithPrewarming:
             await asyncio.sleep(5)  # Wait 5 seconds between checks
 
     async def ping_health_endpoint(self):
-        """Regular health check ping"""
-        if not self.render_url or not self.session:
+        """Regular health check ping with better error handling"""
+        if not self.render_url:
             return False
             
         try:
-            async with self.session.get(f"{self.render_url}/health") as response:
-                if response.status == 200:
-                    current_time = datetime.now(self.timezone).strftime('%H:%M:%S')
-                    logger.info(f"✅ Keep-alive ping successful at {current_time}")
-                    return True
-                else:
-                    logger.warning(f"⚠️ Keep-alive ping returned {response.status}")
-                    return False
+            # Create fresh session for each request to avoid SSL context issues
+            timeout = aiohttp.ClientTimeout(total=10)
+            async with aiohttp.ClientSession(timeout=timeout) as session:
+                async with session.get(f"{self.render_url}/health") as response:
+                    if response.status == 200:
+                        current_time = datetime.now(self.timezone).strftime('%H:%M:%S')
+                        logger.info(f"✅ Keep-alive ping successful at {current_time}")
+                        return True
+                    else:
+                        logger.warning(f"⚠️ Keep-alive ping returned {response.status}")
+                        return False
         except Exception as e:
             logger.error(f"❌ Keep-alive ping failed: {e}")
             return False
@@ -167,5 +159,5 @@ class TimeBasedKeepAliveWithPrewarming:
 # Main function for integration
 async def keep_alive():
     """Export function for main.py integration"""
-    async with TimeBasedKeepAliveWithPrewarming() as keeper:
-        await keeper.keep_alive_scheduled()
+    keeper = TimeBasedKeepAliveWithPrewarming()  # Remove async with
+    await keeper.keep_alive_scheduled()

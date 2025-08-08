@@ -414,15 +414,12 @@ def _fallback_parse(text, message_date, user_name):
         'input_by': user_name or 'Unknown'
     }
 
-async def run_bot_with_keepalive():
+async def run_bot_sync():
     """Run bot with pre-warming keep-alive service"""
     logger.info("🚀 Starting bot with pre-warming keep-alive...")
     
-    # Import here to avoid circular imports
-    from keep_alive import keep_alive
-    
-    # Start keep-alive task in background
-    keep_alive_task = asyncio.create_task(keep_alive())
+    """Synchronous bot runner for Render deployment"""
+    logger.info("🚀 Starting bot with pre-warming keep-alive...")
     
     # Get deployment configuration
     port = int(os.environ.get('PORT', 8000))
@@ -444,15 +441,18 @@ async def run_bot_with_keepalive():
     
     logger.info("✅ Handlers registered with service checks")
 
+    # Start keep-alive as background task within bot's event loop
     if render_url:
-        # Production webhook mode with Flask health checks
+        from keep_alive import keep_alive
+        
+        async def start_keepalive():
+            asyncio.create_task(keep_alive())
+        
+        application.post_init = start_keepalive
+    
+    if render_url:
+        # Production webhook mode
         webhook_url = f"{render_url}/webhook"
-        logger.info(f"🌐 Webhook mode - URL: {webhook_url}")
-
-        # Create Flask app for health checks
-        app = create_flask_app()
-
-        # Run webhook with proper configuration
         application.run_webhook(
             listen="0.0.0.0",
             port=port,
@@ -464,9 +464,7 @@ async def run_bot_with_keepalive():
             allowed_updates=['message', 'callback_query']
         )
     else:
-        # Development polling mode
-        logger.info("💻 Polling mode")
-        application.run_polling(allowed_updates=Update.ALL_TYPES)
+        application.run_polling()
 
 def main():
     """Main function with comprehensive error handling"""
@@ -483,8 +481,8 @@ def main():
         init_thread.start()
         logger.info("🔧 Background service initialization started")
 
-        # Run the async bot with keep-alive and pre-warming
-        asyncio.run(run_bot_with_keepalive())
+        # Run the async bot_sync
+        run_bot_sync()
 
     except Exception as e:
         logger.error(f"❌ Bot startup failed: {e}")

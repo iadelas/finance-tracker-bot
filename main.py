@@ -1,7 +1,6 @@
 import logging
 import os
 import sys
-import asyncio
 import threading
 import re
 
@@ -29,24 +28,10 @@ class ServiceState:
         self.vision_ready = False
         self.bot_ready = False
         self.initialization_start = datetime.now()
-        self.flask_app = None
     
     def all_ready(self):
         return self.sheets_ready and self.ai_ready and self.vision_ready and self.bot_ready
     
-    def get_status(self):
-        return {
-            'status': 'healthy' if self.all_ready() else 'initializing',
-            'timestamp': datetime.now().isoformat(),
-            'uptime_seconds': (datetime.now() - self.initialization_start).total_seconds(),
-            'services': {
-                'sheets': self.sheets_ready,
-                'ai': self.ai_ready,
-                'vision': self.vision_ready,
-                'bot': self.bot_ready
-            }
-        }
-
 # Global instances
 service_state = ServiceState()
 sheets_manager = None
@@ -355,77 +340,57 @@ def _fallback_parse(text, message_date, user_name):
         'input_by': user_name or 'Unknown'
     }
 
-def run_bot_sync():
-    """Run bot with pre-warming keep-alive service"""
-    logger.info("🚀 Starting bot with pre-warming keep-alive...")
-    
-    """Synchronous bot runner for Render deployment"""
-    logger.info("🚀 Starting bot with pre-warming keep-alive...")
-    
-    # Get deployment configuration
-    port = int(os.environ.get('PORT', 10000))
-    render_url = os.environ.get('RENDER_EXTERNAL_URL')
-    
-    logger.info(f"📍 Port: {port}")
-    logger.info(f"📍 Render URL: {render_url}")
-
-    # Create Telegram application
-    application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
-
-    # Add handlers with service-ready checks
-    application.add_handler(CommandHandler("start", handle_start_with_check))
-    application.add_handler(CommandHandler("help", help_command))  # Always available
-    application.add_handler(CommandHandler("summary", handle_summary_with_check))
-    application.add_handler(CommandHandler("categories", handle_categories_with_check))
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text_with_check))
-    application.add_handler(MessageHandler(filters.PHOTO, handle_photo_with_check))
-    
-    logger.info("✅ Handlers registered with service checks")
-    
-    # Add keep-alive as a background task WITHIN the bot's event loop
-    async def post_init(app):
-        """Start keep-alive task after bot initializes"""
-        if render_url:
-            from keep_alive import keep_alive
-            asyncio.create_task(keep_alive())
-            logger.info("✅ Keep-alive task started")
-
-    application.post_init = post_init
-
-    if render_url:
-        # Production webhook mode
-        webhook_url = f"{render_url}/webhook"
-        application.run_webhook(
-            listen="0.0.0.0",
-            port=port,
-            webhook_url=webhook_url,
-            url_path="/webhook",
-            drop_pending_updates=True,
-            secret_token=os.getenv('WEBHOOK_SECRET', ''),
-            max_connections=100,
-            allowed_updates=['message', 'callback_query']
-        )
-    else:
-        logger.info("💻 Starting polling mode")
-        application.run_polling()
-
 def main():
-    """Main function with comprehensive error handling"""
-    logger.info("🚀 Starting Finance Tracker Bot with Pre-warming...")
+    """Main function - BOT ONLY"""
+    logger.info("🚀 Starting Finance Tracker Bot (BOT ONLY)...")
     
     try:
-        # Validate environment
         if not TELEGRAM_BOT_TOKEN:
             logger.error("❌ TELEGRAM_BOT_TOKEN not found!")
             sys.exit(1)
 
-        # Start background initialization immediately
+        # Start background initialization
         init_thread = threading.Thread(target=initialize_services_background, daemon=True)
         init_thread.start()
         logger.info("🔧 Background service initialization started")
 
-        # Run the async bot_sync
-        run_bot_sync()
+        # Get configuration
+        port = int(os.environ.get('PORT', 10000))
+        render_url = os.environ.get('RENDER_EXTERNAL_URL')
+        
+        logger.info(f"📍 Port: {port}")
+        logger.info(f"📍 Render URL: {render_url}")
+
+        # Create application
+        application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
+
+        # Add handlers
+        application.add_handler(CommandHandler("start", handle_start_with_check))
+        application.add_handler(CommandHandler("help", help_command))
+        application.add_handler(CommandHandler("summary", handle_summary_with_check))
+        application.add_handler(CommandHandler("categories", handle_categories_with_check))
+        application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text_with_check))
+        application.add_handler(MessageHandler(filters.PHOTO, handle_photo_with_check))
+
+        logger.info("✅ Handlers registered")
+
+        if render_url:
+            webhook_url = f"{render_url}/webhook"
+            logger.info(f"🌐 Starting webhook: {webhook_url}")
+            
+            application.run_webhook(
+                listen="0.0.0.0",
+                port=port,
+                webhook_url=webhook_url,
+                url_path="/webhook",
+                drop_pending_updates=True,
+                secret_token=os.getenv('WEBHOOK_SECRET', ''),
+                max_connections=100,
+                allowed_updates=['message', 'callback_query']
+            )
+        else:
+            logger.info("💻 Starting polling mode")
+            application.run_polling()
 
     except Exception as e:
         logger.error(f"❌ Bot startup failed: {e}")

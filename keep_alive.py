@@ -64,13 +64,16 @@ class TimeBasedKeepAliveWithPrewarming:
         
         logger.info("🔥 Starting pre-warming sequence...")
         
-        for endpoint in endpoints:
-            try:
-                async with self.session.get(endpoint) as response:
-                    logger.info(f"✅ Pre-warmed: {endpoint} ({response.status})")
-                    await asyncio.sleep(1)  # Brief delay between requests
-            except Exception as e:
-                logger.warning(f"⚠️ Pre-warm failed for {endpoint}: {e}")
+        # Create session for pre-warming
+        timeout = aiohttp.ClientTimeout(total=30)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            for endpoint in endpoints:
+                try:
+                    async with session.get(endpoint) as response:
+                        logger.info(f"✅ Pre-warmed: {endpoint} ({response.status})")
+                        await asyncio.sleep(1)
+                except Exception as e:
+                    logger.warning(f"⚠️ Pre-warm failed for {endpoint}: {e}")
         
         # Additional warm-up: simulate service initialization
         await self.warm_up_initialization()
@@ -79,21 +82,22 @@ class TimeBasedKeepAliveWithPrewarming:
         """Simulate service initialization to pre-load components"""
         logger.info("🔧 Warming up service initialization...")
         
-        # Warm up health endpoint multiple times to ensure services are ready
-        for i in range(3):
-            try:
-                async with self.session.get(f"{self.render_url}/health") as response:
-                    if response.status == 200:
-                        data = await response.json()
-                        if data.get('status') == 'healthy':
-                            logger.info(f"✅ Initialization check {i+1}/3: Healthy")
-                            break
-                    else:
-                        logger.info(f"⏳ Initialization check {i+1}/3: Status {response.status}")
-            except Exception as e:
-                logger.warning(f"⚠️ Initialization check {i+1}/3 failed: {e}")
-            
-            await asyncio.sleep(5)  # Wait 5 seconds between checks
+        timeout = aiohttp.ClientTimeout(total=10)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            for i in range(3):
+                try:
+                    async with session.get(f"{self.render_url}/health") as response:
+                        if response.status == 200:
+                            data = await response.json()
+                            if data.get('status') == 'healthy':
+                                logger.info(f"✅ Initialization check {i+1}/3: Healthy")
+                                break
+                        else:
+                            logger.info(f"⏳ Initialization check {i+1}/3: Status {response.status}")
+                except Exception as e:
+                    logger.warning(f"⚠️ Initialization check {i+1}/3 failed: {e}")
+                
+                await asyncio.sleep(5)
 
     async def ping_health_endpoint(self):
         """Regular health check ping with better error handling"""

@@ -22,37 +22,6 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Initialize processors
-try:
-    logger.info("🔧 Initializing Sheets manager...")
-    sheets_manager = SheetsManager()
-    logger.info("✅ Sheets manager initialized")
-except Exception as e:
-    logger.error(f"❌ Sheets manager failed: {e}")
-    sheets_manager = None
-
-try:
-    logger.info("🔧 Initializing AI processor...")
-    ai_processor = AIProcessor(sheets_manager=sheets_manager)
-    logger.info("✅ AI processor initialized")
-except Exception as e:
-    logger.error(f"❌ AI processor failed: {e}")
-    ai_processor = None
-
-try:
-    logger.info("🔧 Initializing Vision processor...")
-    vision_processor = VisionProcessor()
-    vision_processor = VisionProcessor(sheets_manager=sheets_manager)
-    
-    if hasattr(vision_processor, 'vision_client') and vision_processor.vision_client:
-        logger.info("✅ Vision processor initialized")
-    else:
-        logger.warning("⚠️ Vision processor initialized but Vision API client unavailable")
-        
-except Exception as e:
-    logger.error(f"❌ Vision processor failed: {e}")
-    vision_processor = None
-
 # Global service state tracking
 class ServiceState:
     def __init__(self):
@@ -414,7 +383,7 @@ def _fallback_parse(text, message_date, user_name):
         'input_by': user_name or 'Unknown'
     }
 
-async def run_bot_sync():
+def run_bot_sync():
     """Run bot with pre-warming keep-alive service"""
     logger.info("🚀 Starting bot with pre-warming keep-alive...")
     
@@ -445,7 +414,7 @@ async def run_bot_sync():
     if render_url:
         from keep_alive import keep_alive
         
-        async def start_keepalive():
+        async def start_keepalive(app):
             asyncio.create_task(keep_alive())
         
         application.post_init = start_keepalive

@@ -86,33 +86,6 @@ def initialize_services_background():
     except Exception as e:
         logger.error(f"❌ Background initialization failed: {e}")
 
-def create_flask_app():
-    """Create Flask app for health checks - NO PORT CONFLICTS"""
-    app = Flask(__name__)
-    
-    @app.route('/health')
-    def health_check():
-        """Detailed health check with service status"""
-        status_data = service_state.get_status()
-        return jsonify(status_data), 200 if service_state.all_ready() else 202
-    
-    @app.route('/webhook', methods=['POST'])
-    def webhook():
-        """Webhook endpoint - always responds quickly"""
-        return "OK", 200
-    
-    @app.route('/')
-    def root():
-        """Root endpoint"""
-        return jsonify({
-            'service': 'Finance Tracker Bot',
-            'status': 'running',
-            'timestamp': datetime.now().isoformat()
-        })
-    
-    service_state.flask_app = app
-    return app
-
 # Service-ready command handlers
 async def handle_start_with_check(update: Update, context: CallbackContext):
     """Start command with service readiness check"""

@@ -52,50 +52,24 @@ class TimeBasedKeepAliveWithPrewarming:
         return int((next_active - now).total_seconds())
 
     async def pre_warm_services(self):
-        """Advanced pre-warming with multiple endpoints"""
-        if not self.render_url or not self.session:
-            logger.warning("Cannot pre-warm: missing URL or session")
+        """Simple pre-warming with basic connectivity"""
+        if not self.render_url:
+            logger.warning("Cannot pre-warm: missing URL")
             return
             
-        endpoints = [
-            f"{self.render_url}/webhook",  # Warm webhook endpoint
-        ]
-        
         logger.info("🔥 Starting pre-warming sequence...")
         
-        # Create session for pre-warming
-        timeout = aiohttp.ClientTimeout(total=30)
-        async with aiohttp.ClientSession(timeout=timeout) as session:
-            for endpoint in endpoints:
-                try:
-                    async with session.get(endpoint) as response:
-                        logger.info(f"✅ Pre-warmed: {endpoint} ({response.status})")
-                        await asyncio.sleep(1)
-                except Exception as e:
-                    logger.warning(f"⚠️ Pre-warm failed for {endpoint}: {e}")
-        
-        # Additional warm-up: simulate service initialization
-        await self.warm_up_initialization()
+        # Just ping the service 3 times to wake it up
+        for i in range(3):
+            await self.ping_health_endpoint()
+            await asyncio.sleep(2)
+            
+            # Additional warm-up: simulate service initialization
+            await self.warm_up_initialization()
     
     async def warm_up_initialization(self):
         """Warm up using webhook endpoint"""
         logger.info("🔧 Warming up service initialization...")
-        
-        timeout = aiohttp.ClientTimeout(total=10)
-        async with aiohttp.ClientSession(timeout=timeout) as session:
-            for i in range(3):
-                try:
-                    async with session.post(f"{self.render_url}/webhook", 
-                                        json={"ping": f"init_check_{i+1}"}) as response:
-                        if response.status == 200:
-                            logger.info(f"✅ Initialization check {i+1}/3: Healthy")
-                            break
-                        else:
-                            logger.info(f"⏳ Initialization check {i+1}/3: Status {response.status}")
-                except Exception as e:
-                    logger.warning(f"⚠️ Initialization check {i+1}/3 failed: {e}")
-                
-                await asyncio.sleep(5)
 
     async def ping_health_endpoint(self):
         """Regular health check ping with better error handling"""
@@ -105,16 +79,13 @@ class TimeBasedKeepAliveWithPrewarming:
         try:
             timeout = aiohttp.ClientTimeout(total=10)
             async with aiohttp.ClientSession(timeout=timeout) as session:
-                # Ping the webhook endpoint instead of /health
-                async with session.post(f"{self.render_url}/webhook", 
-                                    json={"ping": "keep_alive"}) as response:
-                    if response.status == 200:
-                        current_time = datetime.now(self.timezone).strftime('%H:%M:%S')
-                        logger.info(f"✅ Keep-alive ping successful at {current_time}")
-                        return True
-                    else:
-                        logger.warning(f"⚠️ Keep-alive ping returned {response.status}")
-                        return False
+                # Just hit the base domain without any path - this will keep service awake
+                base_url = self.render_url.rstrip('/')  # Remove trailing slash if any
+                async with session.get(base_url) as response:
+                    # Any response (even 404) means service is alive
+                    current_time = datetime.now(self.timezone).strftime('%H:%M:%S')
+                    logger.info(f"✅ Keep-alive ping successful at {current_time} (status: {response.status})")
+                    return True
         except Exception as e:
             logger.error(f"❌ Keep-alive ping failed: {e}")
             return False

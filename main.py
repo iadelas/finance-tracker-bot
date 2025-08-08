@@ -341,15 +341,16 @@ def _fallback_parse(text, message_date, user_name):
     }
 
 def main():
-    """Main function - BOT ONLY"""
-    logger.info("🚀 Starting Finance Tracker Bot (BOT ONLY)...")
+    """CLEAN main function - no background tasks, no asyncio conflicts"""
+    logger.info("🚀 Starting Finance Tracker Bot (External Keep-Alive)")
     
     try:
+        # Validate environment
         if not TELEGRAM_BOT_TOKEN:
             logger.error("❌ TELEGRAM_BOT_TOKEN not found!")
             sys.exit(1)
 
-        # Start background initialization
+        # Start background service initialization
         init_thread = threading.Thread(target=initialize_services_background, daemon=True)
         init_thread.start()
         logger.info("🔧 Background service initialization started")
@@ -364,7 +365,7 @@ def main():
         # Create application
         application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
 
-        # Add handlers
+        # Add handlers with service-ready checks
         application.add_handler(CommandHandler("start", handle_start_with_check))
         application.add_handler(CommandHandler("help", help_command))
         application.add_handler(CommandHandler("summary", handle_summary_with_check))
@@ -374,6 +375,7 @@ def main():
 
         logger.info("✅ Handlers registered")
 
+        # Run bot - NO background tasks, NO asyncio conflicts
         if render_url:
             webhook_url = f"{render_url}/webhook"
             logger.info(f"🌐 Starting webhook: {webhook_url}")

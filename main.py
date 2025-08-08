@@ -10,7 +10,7 @@ from telegram.ext import Application, CommandHandler, MessageHandler, filters, C
 from ai_processor import AIProcessor
 from vision_processor import VisionProcessor
 from sheets_manager import SheetsManager
-from config import TELEGRAM_BOT_TOKEN
+from config import TELEGRAM_BOT_TOKEN, WEBHOOK_SECRET
 from utils import ResponseFormatter
 
 # Configure logging
@@ -386,7 +386,7 @@ def main():
                 webhook_url=webhook_url,
                 url_path="/webhook",
                 drop_pending_updates=True,
-                secret_token=os.getenv('WEBHOOK_SECRET', ''),
+                secret_token=WEBHOOK_SECRET,
                 max_connections=100,
                 allowed_updates=['message', 'callback_query']
             )

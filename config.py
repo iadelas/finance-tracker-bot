@@ -9,6 +9,8 @@ TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
 GEMINI_API_KEY = os.getenv('GEMINI_API_KEY')
 GOOGLE_SHEET_ID = os.getenv('GOOGLE_SHEET_ID')
 GOOGLE_CREDENTIALS_FILE = os.getenv('GOOGLE_CREDENTIALS_FILE')
+WEBHOOK_SECRET = os.getenv('WEBHOOK_SECRET', '')  # Optional webhook security token
+
 
 def validate_environment():
     """Validate that all required environment variables are set"""
@@ -17,6 +19,7 @@ def validate_environment():
         'GEMINI_API_KEY': GEMINI_API_KEY,
         'GOOGLE_SHEET_ID': GOOGLE_SHEET_ID,
         'GOOGLE_CREDENTIALS_FILE': GOOGLE_CREDENTIALS_FILE,
+        'WEBHOOK_SECRET': WEBHOOK_SECRET,
     }
     
     missing_vars = [var for var, value in required_vars.items() if not value]

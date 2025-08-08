@@ -58,7 +58,6 @@ class TimeBasedKeepAliveWithPrewarming:
             return
             
         endpoints = [
-            f"{self.render_url}/health",
             f"{self.render_url}/webhook",  # Warm webhook endpoint
         ]
         
@@ -79,19 +78,18 @@ class TimeBasedKeepAliveWithPrewarming:
         await self.warm_up_initialization()
     
     async def warm_up_initialization(self):
-        """Simulate service initialization to pre-load components"""
+        """Warm up using webhook endpoint"""
         logger.info("🔧 Warming up service initialization...")
         
         timeout = aiohttp.ClientTimeout(total=10)
         async with aiohttp.ClientSession(timeout=timeout) as session:
             for i in range(3):
                 try:
-                    async with session.get(f"{self.render_url}/health") as response:
+                    async with session.post(f"{self.render_url}/webhook", 
+                                        json={"ping": f"init_check_{i+1}"}) as response:
                         if response.status == 200:
-                            data = await response.json()
-                            if data.get('status') == 'healthy':
-                                logger.info(f"✅ Initialization check {i+1}/3: Healthy")
-                                break
+                            logger.info(f"✅ Initialization check {i+1}/3: Healthy")
+                            break
                         else:
                             logger.info(f"⏳ Initialization check {i+1}/3: Status {response.status}")
                 except Exception as e:
@@ -105,10 +103,11 @@ class TimeBasedKeepAliveWithPrewarming:
             return False
             
         try:
-            # Create fresh session for each request to avoid SSL context issues
             timeout = aiohttp.ClientTimeout(total=10)
             async with aiohttp.ClientSession(timeout=timeout) as session:
-                async with session.get(f"{self.render_url}/health") as response:
+                # Ping the webhook endpoint instead of /health
+                async with session.post(f"{self.render_url}/webhook", 
+                                    json={"ping": "keep_alive"}) as response:
                     if response.status == 200:
                         current_time = datetime.now(self.timezone).strftime('%H:%M:%S')
                         logger.info(f"✅ Keep-alive ping successful at {current_time}")

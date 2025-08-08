@@ -3,10 +3,8 @@ import os
 import sys
 import threading
 import re
-import signal
 import asyncio
 
-from flask import Flask
 from datetime import datetime
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, CallbackContext
@@ -50,7 +48,6 @@ service_state = ServiceState()
 sheets_manager = None
 ai_processor = None
 vision_processor = None
-flask_app = Flask(__name__)
 
 def initialize_services_background():
     """Initialize heavy services in background thread"""
@@ -84,54 +81,16 @@ def initialize_services_background():
     except Exception as e:
         logger.error(f"❌ Background initialization failed: {e}")
 
-# Flask health endpoints
-@flask_app.route('/health')
-def health_check():
-    """Health endpoint that returns 200 - prevents 404 errors in cron"""
-    return {"status": "healthy", "timestamp": datetime.now().isoformat()}, 200
-
-@flask_app.route('/warmup')
-def warmup_endpoint():
-    """Warm-up endpoint for morning cron job"""
-    status = service_state.get_status()
-    
-    if service_state.all_ready():
-        return {
-            "status": "warm", 
-            "services": status,
-            "message": "All services ready"
-        }, 200
-    else:
-        return {
-            "status": "warming", 
-            "services": status,
-            "message": "Services initializing"
-        }, 202
-
-@flask_app.route('/')
-def root():
-    """Root endpoint"""
-    return {
-        "bot": "Finance Tracker Bot", 
-        "status": "running",
-        "uptime": service_state.get_status()['uptime']
-    }, 200
-
-def run_flask_server():
-    """Run Flask health server on separate port"""
-    try:
-        flask_app.run(
-            host="0.0.0.0", 
-            port=8080, 
-            debug=False,
-            use_reloader=False
-        )
-    except Exception as e:
-        logger.error(f"❌ Flask server failed: {e}")
-
 # Service-ready command handlers
 async def handle_start_with_check(update: Update, context: CallbackContext):
     """Start command with service readiness check"""
+    # Log user info for chat ID extraction
+    chat_id = update.effective_chat.id
+    user = update.effective_user
+    username = user.username or user.first_name or "Unknown"
+    
+    logger.info(f"User @{username} (ID: {chat_id}) sent: /start")
+    
     if not service_state.all_ready():
         elapsed = (datetime.now() - service_state.initialization_start).total_seconds()
         await update.message.reply_text(
@@ -451,37 +410,30 @@ def _fallback_parse(text, message_date, user_name):
     }
 
 def main():
-    """CLEAN main function with health server"""
-    logger.info("🚀 Starting Finance Tracker Bot with Health Server")
+    """Simple main function - bot only"""
+    logger.info("🚀 Starting Finance Tracker Bot (Telegram Warmup)")
     
     try:
-        # Validate environment
         if not TELEGRAM_BOT_TOKEN:
             logger.error("❌ TELEGRAM_BOT_TOKEN not found!")
             sys.exit(1)
 
-        # Start Flask health server
-        flask_thread = threading.Thread(target=run_flask_server, daemon=True)
-        flask_thread.start()
-        logger.info("🏥 Health server started on port 8080")
-
-        # Start background service initialization
+        # Background initialization (unchanged)
         init_thread = threading.Thread(target=initialize_services_background, daemon=True)
         init_thread.start()
         logger.info("🔧 Background service initialization started")
 
-        # Get configuration
+        # Configuration
         port = int(os.environ.get('PORT', 10000))
         render_url = os.environ.get('RENDER_EXTERNAL_URL')
         
-        logger.info(f"📍 Main Port: {port}")
-        logger.info(f"📍 Health Port: 8080")
+        logger.info(f"📍 Port: {port}")
         logger.info(f"📍 Render URL: {render_url}")
 
         # Create application
         application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
 
-        # Add handlers with service-ready checks
+        # Add all your existing handlers
         application.add_handler(CommandHandler("start", handle_start_with_check))
         application.add_handler(CommandHandler("help", help_command))
         application.add_handler(CommandHandler("summary", handle_summary_with_check))
@@ -492,7 +444,6 @@ def main():
 
         logger.info("✅ Handlers registered")
 
-        # Run bot - NO background tasks, NO asyncio conflicts
         if render_url:
             webhook_url = f"{render_url}/webhook"
             logger.info(f"🌐 Starting webhook: {webhook_url}")

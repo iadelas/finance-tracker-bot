@@ -8,7 +8,6 @@ import re
 from datetime import datetime
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, CallbackContext
-from flask import Flask, jsonify
 from ai_processor import AIProcessor
 from vision_processor import VisionProcessor
 from sheets_manager import SheetsManager

@@ -35,6 +35,16 @@ class ServiceState:
     def all_ready(self):
         return self.sheets_ready and self.ai_ready and self.vision_ready and self.bot_ready
     
+    def get_status(self):
+        """Return current service status and uptime"""
+        return {
+            'sheets': self.sheets_ready,
+            'ai': self.ai_ready,
+            'vision': self.vision_ready,
+            'bot': self.bot_ready,
+            'uptime': (datetime.now() - self.initialization_start).total_seconds()
+        }
+
 # Global instances
 service_state = ServiceState()
 sheets_manager = None

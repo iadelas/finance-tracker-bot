@@ -1,9 +1,14 @@
 import logging
 import os
 import sys
-import traceback
+import asyncio
+import threading
+import re
+
+from datetime import datetime
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, CallbackContext
+from flask import Flask, jsonify
 from ai_processor import AIProcessor
 from vision_processor import VisionProcessor
 from sheets_manager import SheetsManager
@@ -47,6 +52,163 @@ try:
 except Exception as e:
     logger.error(f"❌ Vision processor failed: {e}")
     vision_processor = None
+
+# Global service state tracking
+class ServiceState:
+    def __init__(self):
+        self.sheets_ready = False
+        self.ai_ready = False
+        self.vision_ready = False
+        self.bot_ready = False
+        self.initialization_start = datetime.now()
+        self.flask_app = None
+    
+    def all_ready(self):
+        return self.sheets_ready and self.ai_ready and self.vision_ready and self.bot_ready
+    
+    def get_status(self):
+        return {
+            'status': 'healthy' if self.all_ready() else 'initializing',
+            'timestamp': datetime.now().isoformat(),
+            'uptime_seconds': (datetime.now() - self.initialization_start).total_seconds(),
+            'services': {
+                'sheets': self.sheets_ready,
+                'ai': self.ai_ready,
+                'vision': self.vision_ready,
+                'bot': self.bot_ready
+            }
+        }
+
+# Global instances
+service_state = ServiceState()
+sheets_manager = None
+ai_processor = None
+vision_processor = None
+
+def initialize_services_background():
+    """Initialize heavy services in background thread"""
+    global sheets_manager, ai_processor, vision_processor, service_state
+    
+    try:
+        logger.info("🔧 Background initialization starting...")
+        
+        # Initialize Sheets manager
+        logger.info("Initializing Sheets manager...")
+        sheets_manager = SheetsManager()
+        service_state.sheets_ready = True
+        logger.info("✅ Sheets manager ready")
+        
+        # Initialize AI processor
+        logger.info("Initializing AI processor...")
+        ai_processor = AIProcessor(sheets_manager=sheets_manager)
+        service_state.ai_ready = True
+        logger.info("✅ AI processor ready")
+        
+        # Initialize Vision processor
+        logger.info("Initializing Vision processor...")
+        vision_processor = VisionProcessor(sheets_manager=sheets_manager)
+        service_state.vision_ready = True
+        logger.info("✅ Vision processor ready")
+        
+        service_state.bot_ready = True
+        init_time = (datetime.now() - service_state.initialization_start).total_seconds()
+        logger.info(f"🚀 All services ready in {init_time:.2f}s")
+        
+    except Exception as e:
+        logger.error(f"❌ Background initialization failed: {e}")
+
+def create_flask_app():
+    """Create Flask app for health checks - NO PORT CONFLICTS"""
+    app = Flask(__name__)
+    
+    @app.route('/health')
+    def health_check():
+        """Detailed health check with service status"""
+        status_data = service_state.get_status()
+        return jsonify(status_data), 200 if service_state.all_ready() else 202
+    
+    @app.route('/webhook', methods=['POST'])
+    def webhook():
+        """Webhook endpoint - always responds quickly"""
+        return "OK", 200
+    
+    @app.route('/')
+    def root():
+        """Root endpoint"""
+        return jsonify({
+            'service': 'Finance Tracker Bot',
+            'status': 'running',
+            'timestamp': datetime.now().isoformat()
+        })
+    
+    service_state.flask_app = app
+    return app
+
+# Service-ready command handlers
+async def handle_start_with_check(update: Update, context: CallbackContext):
+    """Start command with service readiness check"""
+    if not service_state.all_ready():
+        elapsed = (datetime.now() - service_state.initialization_start).total_seconds()
+        await update.message.reply_text(
+            "🔄 **Bot is starting up...**\n"
+            f"⏱️ Elapsed: {elapsed:.0f}s\n"
+            "🤖 Services loading, please wait!"
+        )
+        return
+    
+    await start(update, context)
+
+async def handle_text_with_check(update: Update, context: CallbackContext):
+    """Text handler with graceful service checking"""
+    if not service_state.all_ready():
+        services_status = "".join([
+            f"{'✅' if service_state.sheets_ready else '⏳'} Sheets  ",
+            f"{'✅' if service_state.ai_ready else '⏳'} AI  ",
+            f"{'✅' if service_state.vision_ready else '⏳'} Vision"
+        ])
+        
+        await update.message.reply_text(
+            "⏳ **Services still loading...**\n"
+            f"{services_status}\n"
+            "📱 Please try again in a moment"
+        )
+        return
+    
+    await handle_text(update, context)
+
+async def handle_photo_with_check(update: Update, context: CallbackContext):
+    """Photo handler with vision service check"""
+    if not service_state.vision_ready:
+        await update.message.reply_text(
+            "📷 **Vision API loading...**\n"
+            "⏱️ Please wait and try again\n"
+            "🔄 Google Vision initializing..."
+        )
+        return
+    
+    await handle_photo(update, context)
+
+async def handle_summary_with_check(update: Update, context: CallbackContext):
+    """Summary with sheets check"""
+    if not service_state.sheets_ready:
+        await update.message.reply_text(
+            "📊 **Google Sheets connecting...**\n"
+            "⏳ Please try again in a moment"
+        )
+        return
+    
+    await summary_command(update, context)
+
+async def handle_categories_with_check(update: Update, context: CallbackContext):
+    """Categories with sheets check"""
+    if not service_state.sheets_ready:
+        await update.message.reply_text(
+            "📋 **Loading categories...**\n"
+            "⏳ Please try again in a moment"
+        )
+        return
+    
+    await categories_command(update, context)
 
 # Command handlers
 async def start(update: Update, context: CallbackContext):
@@ -214,8 +376,6 @@ async def handle_photo(update: Update, context: CallbackContext):
 
 def _fallback_parse(text, message_date, user_name):
     """Simple regex-based expense parser as fallback"""
-    import re
-    from datetime import datetime
     
     # Extract amount
     amount = 0
@@ -254,57 +414,80 @@ def _fallback_parse(text, message_date, user_name):
         'input_by': user_name or 'Unknown'
     }
 
+async def run_bot_with_keepalive():
+    """Run bot with pre-warming keep-alive service"""
+    logger.info("🚀 Starting bot with pre-warming keep-alive...")
+    
+    # Import here to avoid circular imports
+    from keep_alive import keep_alive
+    
+    # Start keep-alive task in background
+    keep_alive_task = asyncio.create_task(keep_alive())
+    
+    # Get deployment configuration
+    port = int(os.environ.get('PORT', 8000))
+    render_url = os.environ.get('RENDER_EXTERNAL_URL')
+    
+    logger.info(f"📍 Port: {port}")
+    logger.info(f"📍 Render URL: {render_url}")
+
+    # Create Telegram application
+    application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
+
+    # Add handlers with service-ready checks
+    application.add_handler(CommandHandler("start", handle_start_with_check))
+    application.add_handler(CommandHandler("help", help_command))  # Always available
+    application.add_handler(CommandHandler("summary", handle_summary_with_check))
+    application.add_handler(CommandHandler("categories", handle_categories_with_check))
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text_with_check))
+    application.add_handler(MessageHandler(filters.PHOTO, handle_photo_with_check))
+    
+    logger.info("✅ Handlers registered with service checks")
+
+    if render_url:
+        # Production webhook mode with Flask health checks
+        webhook_url = f"{render_url}/webhook"
+        logger.info(f"🌐 Webhook mode - URL: {webhook_url}")
+
+        # Create Flask app for health checks
+        app = create_flask_app()
+
+        # Run webhook with proper configuration
+        application.run_webhook(
+            listen="0.0.0.0",
+            port=port,
+            webhook_url=webhook_url,
+            url_path="/webhook",
+            drop_pending_updates=True,
+            secret_token=os.getenv('WEBHOOK_SECRET', ''),
+            max_connections=100,
+            allowed_updates=['message', 'callback_query']
+        )
+    else:
+        # Development polling mode
+        logger.info("💻 Polling mode")
+        application.run_polling(allowed_updates=Update.ALL_TYPES)
+
 def main():
     """Main function with comprehensive error handling"""
-    logger.info("🚀 Starting Finance Tracker Bot...")
+    logger.info("🚀 Starting Finance Tracker Bot with Pre-warming...")
     
     try:
         # Validate environment
         if not TELEGRAM_BOT_TOKEN:
             logger.error("❌ TELEGRAM_BOT_TOKEN not found!")
             sys.exit(1)
-        
-        # Get deployment configuration
-        port = int(os.environ.get('PORT', 8000))
-        render_url = os.environ.get('RENDER_EXTERNAL_URL')
-        
-        logger.info(f"📍 Port: {port}")
-        logger.info(f"📍 Render URL: {render_url}")
-        
-        # Create Telegram application
-        application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
-        
-        # Add handlers
-        application.add_handler(CommandHandler("start", start))
-        application.add_handler(CommandHandler("help", help_command))
-        application.add_handler(CommandHandler("summary", summary_command))
-        application.add_handler(CommandHandler("categories", categories_command))
-        application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
-        application.add_handler(MessageHandler(filters.PHOTO, handle_photo))
-        
-        logger.info("✅ Handlers registered")
-        
-        # Start bot
-        if render_url:
-            # Production webhook mode
-            webhook_url = f"{render_url}/webhook"
-            logger.info(f"🌐 Webhook mode - URL: {webhook_url}")
-            
-            application.run_webhook(
-                listen="0.0.0.0",
-                port=port,
-                webhook_url=webhook_url,
-                url_path="/webhook",
-                drop_pending_updates=True
-            )
-        else:
-            # Development polling mode
-            logger.info("💻 Polling mode")
-            application.run_polling(allowed_updates=Update.ALL_TYPES)
-            
+
+        # Start background initialization immediately
+        init_thread = threading.Thread(target=initialize_services_background, daemon=True)
+        init_thread.start()
+        logger.info("🔧 Background service initialization started")
+
+        # Run the async bot with keep-alive and pre-warming
+        asyncio.run(run_bot_with_keepalive())
+
     except Exception as e:
         logger.error(f"❌ Bot startup failed: {e}")
-        traceback.print_exc()
         sys.exit(1)
 
 if __name__ == '__main__':

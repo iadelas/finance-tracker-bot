@@ -363,7 +363,7 @@ def run_bot_sync():
     logger.info("🚀 Starting bot with pre-warming keep-alive...")
     
     # Get deployment configuration
-    port = int(os.environ.get('PORT', 8000))
+    port = int(os.environ.get('PORT', 10000))
     render_url = os.environ.get('RENDER_EXTERNAL_URL')
     
     logger.info(f"📍 Port: {port}")
@@ -381,15 +381,6 @@ def run_bot_sync():
     application.add_handler(MessageHandler(filters.PHOTO, handle_photo_with_check))
     
     logger.info("✅ Handlers registered with service checks")
-
-    # Start keep-alive as background task within bot's event loop
-    if render_url:
-        from keep_alive import keep_alive
-        
-        async def start_keepalive(app):
-            asyncio.create_task(keep_alive())
-        
-        application.post_init = start_keepalive
     
     if render_url:
         # Production webhook mode

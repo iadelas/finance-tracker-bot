@@ -382,6 +382,16 @@ def run_bot_sync():
     
     logger.info("✅ Handlers registered with service checks")
     
+    # Add keep-alive as a background task WITHIN the bot's event loop
+    async def post_init(app):
+        """Start keep-alive task after bot initializes"""
+        if render_url:
+            from keep_alive import keep_alive
+            asyncio.create_task(keep_alive())
+            logger.info("✅ Keep-alive task started")
+
+    application.post_init = post_init
+
     if render_url:
         # Production webhook mode
         webhook_url = f"{render_url}/webhook"
@@ -396,6 +406,7 @@ def run_bot_sync():
             allowed_updates=['message', 'callback_query']
         )
     else:
+        logger.info("💻 Starting polling mode")
         application.run_polling()
 
 def main():

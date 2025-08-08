@@ -3,7 +3,10 @@ import os
 import sys
 import threading
 import re
+import signal
+import asyncio
 
+from flask import Flask
 from datetime import datetime
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, CallbackContext
@@ -37,6 +40,7 @@ service_state = ServiceState()
 sheets_manager = None
 ai_processor = None
 vision_processor = None
+flask_app = Flask(__name__)
 
 def initialize_services_background():
     """Initialize heavy services in background thread"""
@@ -69,6 +73,51 @@ def initialize_services_background():
         
     except Exception as e:
         logger.error(f"❌ Background initialization failed: {e}")
+
+# Flask health endpoints
+@flask_app.route('/health')
+def health_check():
+    """Health endpoint that returns 200 - prevents 404 errors in cron"""
+    return {"status": "healthy", "timestamp": datetime.now().isoformat()}, 200
+
+@flask_app.route('/warmup')
+def warmup_endpoint():
+    """Warm-up endpoint for morning cron job"""
+    status = service_state.get_status()
+    
+    if service_state.all_ready():
+        return {
+            "status": "warm", 
+            "services": status,
+            "message": "All services ready"
+        }, 200
+    else:
+        return {
+            "status": "warming", 
+            "services": status,
+            "message": "Services initializing"
+        }, 202
+
+@flask_app.route('/')
+def root():
+    """Root endpoint"""
+    return {
+        "bot": "Finance Tracker Bot", 
+        "status": "running",
+        "uptime": service_state.get_status()['uptime']
+    }, 200
+
+def run_flask_server():
+    """Run Flask health server on separate port"""
+    try:
+        flask_app.run(
+            host="0.0.0.0", 
+            port=8080, 
+            debug=False,
+            use_reloader=False
+        )
+    except Exception as e:
+        logger.error(f"❌ Flask server failed: {e}")
 
 # Service-ready command handlers
 async def handle_start_with_check(update: Update, context: CallbackContext):
@@ -191,6 +240,57 @@ async def categories_command(update: Update, context: CallbackContext):
         await update.message.reply_text(response, parse_mode='Markdown')
     else:
         await update.message.reply_text("❌ Sheets manager not available")
+
+async def system_warmup_command(update: Update, context: CallbackContext):
+    """Manual system warm-up command"""
+    start_time = datetime.now()
+    
+    await update.message.reply_text("🔥 **Starting system warm-up...**")
+    
+    # Wait for all services to be ready
+    max_wait = 30  # seconds
+    while not service_state.all_ready() and max_wait > 0:
+        await asyncio.sleep(1)
+        max_wait -= 1
+    
+    # Test all services
+    test_results = []
+    
+    # Test Sheets
+    if sheets_manager:
+        try:
+            categories = sheets_manager.get_categories()
+            test_results.append("✅ Sheets connected")
+        except Exception as e:
+            test_results.append(f"❌ Sheets failed: {str(e)[:50]}")
+    else:
+        test_results.append("❌ Sheets not initialized")
+    
+    # Test AI
+    if ai_processor:
+        test_results.append("✅ AI processor ready")
+    else:
+        test_results.append("❌ AI processor not ready")
+    
+    # Test Vision  
+    if vision_processor:
+        test_results.append("✅ Vision API ready")
+    else:
+        test_results.append("❌ Vision API not ready")
+    
+    warmup_time = (datetime.now() - start_time).total_seconds()
+    
+    response = f"""
+🔥 **System Warm-up Complete**
+
+{chr(10).join(test_results)}
+
+⏱️ **Warm-up time:** {warmup_time:.1f}s
+🕐 **System ready at:** {datetime.now().strftime('%H:%M:%S')}
+🚀 **All services operational**
+"""
+    
+    await update.message.reply_text(response, parse_mode='Markdown')
 
 # Message handlers
 async def handle_text(update: Update, context: CallbackContext):
@@ -341,14 +441,19 @@ def _fallback_parse(text, message_date, user_name):
     }
 
 def main():
-    """CLEAN main function - no background tasks, no asyncio conflicts"""
-    logger.info("🚀 Starting Finance Tracker Bot (External Keep-Alive)")
+    """CLEAN main function with health server"""
+    logger.info("🚀 Starting Finance Tracker Bot with Health Server")
     
     try:
         # Validate environment
         if not TELEGRAM_BOT_TOKEN:
             logger.error("❌ TELEGRAM_BOT_TOKEN not found!")
             sys.exit(1)
+
+        # Start Flask health server
+        flask_thread = threading.Thread(target=run_flask_server, daemon=True)
+        flask_thread.start()
+        logger.info("🏥 Health server started on port 8080")
 
         # Start background service initialization
         init_thread = threading.Thread(target=initialize_services_background, daemon=True)
@@ -359,7 +464,8 @@ def main():
         port = int(os.environ.get('PORT', 10000))
         render_url = os.environ.get('RENDER_EXTERNAL_URL')
         
-        logger.info(f"📍 Port: {port}")
+        logger.info(f"📍 Main Port: {port}")
+        logger.info(f"📍 Health Port: 8080")
         logger.info(f"📍 Render URL: {render_url}")
 
         # Create application
@@ -370,6 +476,7 @@ def main():
         application.add_handler(CommandHandler("help", help_command))
         application.add_handler(CommandHandler("summary", handle_summary_with_check))
         application.add_handler(CommandHandler("categories", handle_categories_with_check))
+        application.add_handler(CommandHandler("warmup", system_warmup_command))
         application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text_with_check))
         application.add_handler(MessageHandler(filters.PHOTO, handle_photo_with_check))
 
